@@ -340,15 +340,27 @@ solo-descifrar: tb_descifrado.vvp contenedor_libre.hex $(PROGRAMAS_LLAVE)
 #   make correr PROG=fibonacci.s MOSTRAR=0x100 PALABRAS=47
 #
 # Ensambla el programa y lo corre en el procesador completo hasta HALT. Muestra
-# cuando sube y baja AUTH, la primera falla, los registros y el PSW.
+# cuando sube y baja AUTH, la primera falla, los registros, el PSW y la memoria
+# que el programa escribio.
 #
-#   PROG=      el programa en ensamblador (obligatorio). Basta el nombre, con o
-#              sin .s: se busca aqui y en tools/programas
+#   PROG=      el programa en ensamblador. Basta el nombre, con o sin .s: se
+#              busca aqui y en tools/programas
+#   HEX=       en lugar de PROG, un programa ya en binario: un bundle por linea,
+#              32 digitos hexadecimales, como el que produce el ensamblador o
+#              un compilador que emita binario. Se carga tal cual, sin
+#              ensamblar; la traza muestra direcciones en vez de instrucciones
 #   MEMORIA=   imagen inicial de la memoria de datos, por ejemplo la que genera
 #              load_file.py. Sin ella, la memoria arranca con el .data del
 #              programa
 #   VOLCADO=   archivo donde guardar la memoria de datos completa al terminar,
 #              para sacar el resultado con extract_data.py
+#   RESULTADO= archivo donde guardar el resumen final (ciclos, registros, PSW y
+#              la memoria de MOSTRAR). Por omision resultado_<programa>.txt;
+#              RESULTADO= vacio no lo guarda
+#   ESCRITURAS= archivo con cada escritura a registros y a memoria de toda la
+#              corrida: ciclo, bundle, valor e instruccion. Por omision
+#              escrituras_<programa>.txt; ESCRITURAS= vacio no lo guarda
+#   ESCRITURAS_MAX= tope de lineas de ese archivo (50 000)
 #   LLAVE=     solo para cifrar_archivo.s y descifrar_archivo.s: corre una copia
 #              del programa con esa llave, generada por llave.py
 #   MOSTRAR=   direccion desde donde mostrar la memoria en pantalla, y
@@ -369,6 +381,10 @@ PROG     ?=
 MEMORIA  ?=
 VOLCADO  ?=
 MOSTRAR  ?= 0
+HEX      ?=
+RESULTADO ?= resultado_$(NOMBRE_PROG).txt
+ESCRITURAS ?= escrituras_$(NOMBRE_PROG).txt
+ESCRITURAS_MAX ?= 50000
 PALABRAS ?= 0
 CICLOS   ?= 2000000
 TRAZA    ?= 0
@@ -380,17 +396,33 @@ PROG_CON_S   = $(if $(filter %.s,$(PROG)),$(PROG),$(PROG).s)
 PROG_ENCONTRADO = $(if $(findstring /,$(PROG_CON_S)),$(PROG_CON_S),$(if \
                   $(wildcard $(PROG_CON_S)),$(PROG_CON_S),$(PROGS)/$(PROG_CON_S)))
 
+# Nombre del programa para los archivos de salida, venga de PROG o de HEX
+NOMBRE_PROG = $(if $(strip $(HEX)),$(basename $(notdir $(HEX))),$(basename $(notdir $(PROG_CON_S))))
+FUENTE_PROG = $(if $(strip $(HEX)),$(notdir $(HEX)),$(notdir $(PROG_CON_S)))
+
 # Con LLAVE, el programa que se ensambla es la copia que genera llave.py
 PROG_A_ENSAMBLAR = $(if $(strip $(LLAVE)),$(LLAVE_DIR)/$(notdir $(PROG_CON_S)),$(PROG_ENCONTRADO))
 
 .PHONY: correr
 correr: tb_programa.vvp
-	@test -n "$(PROG)" || { echo "error: falta PROG=programa.s"; exit 2; }
+	@test -z "$(MEMORIA)" -o -f "$(MEMORIA)" || \
+	    { echo "error: no se encontro la imagen de memoria $(MEMORIA)"; exit 2; }
+ifneq ($(strip $(HEX)),)
+	@test -z "$(PROG)" || { echo "error: se usa PROG= o HEX=, no los dos"; exit 2; }
+	@test -f "$(HEX)" || { echo "error: no se encontro $(HEX)"; exit 2; }
+	@! grep -nvE '^[[:space:]]*([0-9A-Fa-f_]{1,32}|@[0-9A-Fa-f]+|//.*)?[[:space:]]*\r?$$' "$(HEX)" | head -3 | \
+	    sed 's/^/error: linea que no es un bundle en hexadecimal: /' | grep . || exit 2
+	@# Se rellena con NOP hasta los 2048 bundles de la memoria, para que
+	@# $$readmemh no avise que faltan palabras
+	{ cat "$(HEX)"; yes 00000000000000000000000000000000 | head -n 2048; } | \
+	    head -n 2048 > programa.hex
+	@rm -f programa_datos.hex programa_texto.txt
+	@touch programa_datos.hex
+else
+	@test -n "$(PROG)" || { echo "error: falta PROG=programa.s (o HEX=programa.hex)"; exit 2; }
 	@test -f "$(PROG_ENCONTRADO)" || \
 	    { echo "error: no se encontro $(PROG_CON_S) ni aqui ni en tools/programas"; \
 	      exit 2; }
-	@test -z "$(MEMORIA)" -o -f "$(MEMORIA)" || \
-	    { echo "error: no se encontro la imagen de memoria $(MEMORIA)"; exit 2; }
 ifneq ($(strip $(LLAVE)),)
 	python3 $(TOOLS)/llave.py "$(LLAVE)" --salida $(LLAVE_DIR)
 	@test -f "$(PROG_A_ENSAMBLAR)" || \
@@ -400,11 +432,14 @@ endif
 	$(ASM) $(PROG_A_ENSAMBLAR) -o programa.hex --datos programa_datos.hex \
 	       --bundles 2048 --palabras 16384 --listado programa.lst
 	@python3 $(TOOLS)/listado_a_texto.py programa.lst -o programa_texto.txt
-	$(VVP) -n tb_programa.vvp +PROGRAMA=programa.hex +TEXTO=programa_texto.txt \
+endif
+	$(VVP) -n tb_programa.vvp +PROGRAMA=programa.hex \
+	       +TEXTO=$(if $(strip $(HEX)),,programa_texto.txt) \
 	       +DATOS=$(if $(MEMORIA),$(MEMORIA),$$(grep -q "[0-9A-Fa-f]" programa_datos.hex && echo programa_datos.hex)) \
 	       +VOLCADO=$(VOLCADO) +CICLOS=$(CICLOS) \
 	       +MOSTRAR=$(shell printf '%d' $(MOSTRAR)) +PALABRAS=$(PALABRAS) \
-	       +TRAZA=$(TRAZA)
+	       +TRAZA=$(TRAZA) +RESULTADO=$(RESULTADO) +FUENTE=$(FUENTE_PROG) \
+	       +ESCRITURAS=$(ESCRITURAS) +ESCRITURAS_MAX=$(ESCRITURAS_MAX)
 
 # Comprueba que el programa de cobertura usa el 100% del conjunto
 cobertura:
@@ -437,6 +472,6 @@ clean:
 	rm -f *.vvp *.vcd cifrado_volcado.hex cifrado_volcado.bin
 	rm -f archivo_libre.hex cifrado_libre.hex cifrado_libre.bin
 	rm -f contenedor_libre.hex descifrado_libre.hex descifrado_libre.bin
-	rm -f criptograma.bin programa.hex programa_datos.hex programa.lst programa_texto.txt
+	rm -f criptograma.bin programa.hex programa_datos.hex programa.lst programa_texto.txt resultado_*.txt escrituras_*.txt
 	rm -rf llave_gen
 	rm -f $(PROGS)/*.hex
