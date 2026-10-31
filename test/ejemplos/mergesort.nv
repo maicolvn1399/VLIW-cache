@@ -1,0 +1,47 @@
+# mergesort.nv -- merge sort iterativo
+functio minimo(x : integer, y : integer) -> integer {
+ si (x < y) { redde x; }
+ redde y;
+}
+functio fusionar(a : integer[], aux : integer[], izq : integer, medio : integer,
+ der : integer) -> nihil {
+ varia i : integer = izq;
+ varia j : integer = medio;
+ per (varia t : integer = izq; t < der; t += 1) {
+ si (i < medio et (j >= der aut a[i] <= a[j])) {
+ aux[t] = a[i];
+ i += 1;
+ } aliter {
+ aux[t] = a[j];
+ j += 1;
+ }
+ }
+ per (varia t : integer = izq; t < der; t += 1) {
+ a[t] = aux[t];
+ }
+}
+functio merge_sort(a : integer[], aux : integer[]) -> nihil {
+ varia n : integer = longitudo(a);
+ varia ancho : integer = 1;
+ dum (ancho < n) {
+ varia inicio : integer = 0;
+ dum (inicio < n) {
+ varia medio : integer = minimo(inicio + ancho, n);
+ varia der : integer = minimo(inicio + 2 * ancho, n);
+ fusionar(a, aux, inicio, medio, der);
+ inicio += 2 * ancho;
+ }
+ ancho *= 2;
+ }
+}
+functio principale() -> integer {
+ varia datos : integer[8] = {38, 27, 43, 3, 9, 82, 10, 1};
+ varia aux : integer[8];
+ merge_sort(datos, aux);
+ varia ordenado : integer = 1;
+ per (varia i : integer = 0; i + 1 < longitudo(datos); i += 1) {
+  si (datos[i] > datos[i + 1]) { ordenado = 0; }
+ }
+ si (ordenado == 1) { redde 100 + datos[0] * 10 + datos[7]; }
+ redde 0;
+}

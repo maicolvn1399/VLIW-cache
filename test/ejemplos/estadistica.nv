@@ -1,0 +1,25 @@
+# estadistica.nv -- archivo 2 de la convolucion (se importa desde convolucion.nv)
+privatum functio total(m : integer[][]) -> integer {
+ varia suma : integer = 0;
+ per (varia i : integer = 0; i < longitudo(m); i += 1) {
+ per (varia j : integer = 0; j < longitudo(m[0]); j += 1) {
+ suma += m[i][j];
+ }
+ }
+ redde suma;
+}
+functio promedio(m : integer[][]) -> integer {
+ varia celdas : integer = longitudo(m) * longitudo(m[0]);
+ redde total(m) / celdas;
+}
+functio maximo(m : integer[][]) -> integer {
+ varia mayor : integer = m[0][0];
+ per (varia i : integer = 0; i < longitudo(m); i += 1) {
+ per (varia j : integer = 0; j < longitudo(m[0]); j += 1) {
+ si (m[i][j] > mayor) {
+ mayor = m[i][j];
+ }
+ }
+ }
+ redde mayor;
+}

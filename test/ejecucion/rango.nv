@@ -1,0 +1,13 @@
+# rango.nv -- indice fuera de rango en ejecucion: debe terminar con 134.
+# El indice se calcula para que la fase 3 no lo pueda constatar como
+# constante, que es justo el caso que la verificacion de rango atiende.
+functio indice_de(n : integer) -> integer {
+    redde n + 2;
+}
+
+functio principale() -> integer {
+    varia v : integer[3] = {10, 20, 30};
+    varia i : integer = indice_de(1);
+    scribe(v[i]);
+    redde 0;
+}

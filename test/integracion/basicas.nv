@@ -1,0 +1,6 @@
+functio factorial(n : integer) -> integer {
+    si (n <= 1) {
+        redde 1;
+    }
+    redde n * factorial(n - 1);
+}

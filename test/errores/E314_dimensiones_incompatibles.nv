@@ -1,0 +1,7 @@
+functio total(m : integer[][]) -> integer {
+    redde longitudo(m);
+}
+functio principale() -> integer {
+    varia v : integer[3] = {1, 2, 3};
+    redde total(v);
+}

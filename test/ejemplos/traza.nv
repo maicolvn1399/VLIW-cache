@@ -1,0 +1,15 @@
+constans N : integer = 3;
+
+privatum functio traza(m : integer[][]) -> integer {
+    varia t : integer = 0;
+    per (varia i : integer = 0; i < longitudo(m); i += 1) {
+        t += m[i][i];
+    }
+    redde t;
+}
+
+functio principale() -> integer {
+    varia m : integer[N][N] = {{1,2,3},{4,5,6},{7,8,9}};
+    scribe(traza(m));
+    redde 0;
+}

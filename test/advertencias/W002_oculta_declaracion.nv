@@ -1,0 +1,8 @@
+functio principale() -> integer {
+    varia a : integer = 1;
+    si (a > 0) {
+        varia a : integer = 2;
+        scribe(a);
+    }
+    redde a;
+}

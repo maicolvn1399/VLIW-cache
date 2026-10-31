@@ -1,0 +1,10 @@
+@cauda
+functio factorial(n : integer, acc : integer) -> integer {
+    si (n <= 1) {
+        redde acc;
+    }
+    redde n * factorial(n - 1, acc);
+}
+functio principale() -> integer {
+    redde factorial(5, 1);
+}

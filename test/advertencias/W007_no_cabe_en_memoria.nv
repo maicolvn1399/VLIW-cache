@@ -1,0 +1,6 @@
+# El marco de principale pide 6400 bytes y la pila de CERBERO tiene 4096.
+functio principale() -> integer {
+    varia enorme : integer[40][40];
+    enorme[0][0] = 1;
+    redde enorme[0][0];
+}

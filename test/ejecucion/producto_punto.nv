@@ -1,0 +1,17 @@
+functio producto_punto(a : integer[], b : integer[]) -> integer {
+    varia suma : integer = 0;
+    per (varia i : integer = 0; i < longitudo(a); i += 1) {
+        suma += a[i] * b[i];
+    }
+    redde suma;
+}
+
+functio principale() -> integer {
+    varia a : integer[6];
+    varia b : integer[6];
+    per (varia i : integer = 0; i < longitudo(a); i += 1) {
+        a[i] = i + 1;
+        b[i] = (i + 1) * 2;
+    }
+    redde producto_punto(a, b);
+}

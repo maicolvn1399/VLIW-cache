@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    varia v : integer[4] = {1, 2, 3, 4};
+    redde v[7];
+}

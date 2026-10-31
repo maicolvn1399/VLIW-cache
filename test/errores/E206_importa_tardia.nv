@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    redde 0;
+}
+importa matriz;

@@ -1,0 +1,107 @@
+===========================================================
+ Evidencia de ejecucion -- compilador Nova para CERBERO
+ Generado por tools/entregables.sh el 2026-10-14 17:03
+===========================================================
+
+novac (Nova) 0.5 - fases 1 a 6: lexico, sintactico, semantico,
+       ensamblador, calculo de saltos y binario CERBERO
+
+-----------------------------------------------------------
+ Ejercicio 1: factorial   (test/factorial.nv)
+-----------------------------------------------------------
+
+$ novac -s test/factorial.nv -o entregables/factorial.nvx
+   ensamblador: entregables/factorial.asm
+   ejecutable:  entregables/factorial.nvx (2704 bytes)
+$ novac_image.py entregables/factorial.nvx
+imagenes CERBERO: 166 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: entregables/factorial.imem.hex
+DMEM: entregables/factorial.dmem.hex
+
+   encabezado y primeros bundles de factorial.nvx:
+     0000000 4e 4f 56 41 01 00 00 00 a6 00 00 00 00 00 00 00
+     0000016 00 00 00 00 00 20 00 00 00 00 00 00 00 20 00 00
+     0000032 fc ff 00 00 8b 9c 12 7e 00 00 00 00 00 00 00 00
+     0000048 00 00 00 00 00 00 00 00 00 00 00 00 fc ff 00 e7
+     0000064 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     *
+     0000096 6b 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     0000112
+
+-----------------------------------------------------------
+ Ejercicio 2: busqueda_matriz   (test/ejemplos/busqueda_matriz.nv)
+-----------------------------------------------------------
+
+$ novac -s test/ejemplos/busqueda_matriz.nv -o entregables/busqueda_matriz.nvx
+   ensamblador: entregables/busqueda_matriz.asm
+   ejecutable:  entregables/busqueda_matriz.nvx (10976 bytes)
+$ novac_image.py entregables/busqueda_matriz.nvx
+imagenes CERBERO: 683 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: entregables/busqueda_matriz.imem.hex
+DMEM: entregables/busqueda_matriz.dmem.hex
+
+   encabezado y primeros bundles de busqueda_matriz.nvx:
+     0000000 4e 4f 56 41 01 00 00 00 ab 02 00 00 00 00 00 00
+     0000016 00 00 00 00 00 20 00 00 00 00 00 00 00 20 00 00
+     0000032 fc ff 00 00 c0 a7 fa 55 00 00 00 00 00 00 00 00
+     0000048 00 00 00 00 00 00 00 00 00 00 00 00 fc ff 00 e7
+     0000064 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     *
+     0000096 70 41 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     0000112
+
+-----------------------------------------------------------
+ Ejercicio 3: mergesort   (test/ejemplos/mergesort.nv)
+-----------------------------------------------------------
+
+$ novac -s test/ejemplos/mergesort.nv -o entregables/mergesort.nvx
+   ensamblador: entregables/mergesort.asm
+   ejecutable:  entregables/mergesort.nvx (19504 bytes)
+$ novac_image.py entregables/mergesort.nvx
+imagenes CERBERO: 1216 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: entregables/mergesort.imem.hex
+DMEM: entregables/mergesort.dmem.hex
+
+   encabezado y primeros bundles de mergesort.nvx:
+     0000000 4e 4f 56 41 01 00 00 00 c0 04 00 00 00 00 00 00
+     0000016 00 00 00 00 00 20 00 00 00 00 00 00 00 20 00 00
+     0000032 fc ff 00 00 b7 00 7e e1 00 00 00 00 00 00 00 00
+     0000048 00 00 00 00 00 00 00 00 00 00 00 00 fc ff 00 e7
+     0000064 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+     *
+     0000096 00 00 00 00 00 00 00 00 00 00 00 00 30 2e 80 e5
+     0000112
+
+-----------------------------------------------------------
+ Ejecucion de los tres ejercicios sobre el RTL de CERBERO
+-----------------------------------------------------------
+imagenes CERBERO: 166 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: /tmp/nova-rtl.JBTGMm/imem.hex
+DMEM: /tmp/nova-rtl.JBTGMm/dmem.hex
+=== ejecutable Nova sobre el RTL CERBERO ===
+  ciclos: 335
+  retorno R6: 120 (0x00000078)
+  scribe en DMEM del procesador (1 valores):
+    [0] 120 (0x00000078)
+RESULTADO: OK
+test/tb_nova_rtl.sv:79: $finish called at 3456000 (1ps)
+imagenes CERBERO: 683 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: /tmp/nova-rtl.ob5RyJ/imem.hex
+DMEM: /tmp/nova-rtl.ob5RyJ/dmem.hex
+=== ejecutable Nova sobre el RTL CERBERO ===
+  ciclos: 1180
+  retorno R6: 12 (0x0000000c)
+  scribe en DMEM del procesador (0 valores):
+RESULTADO: OK
+test/tb_nova_rtl.sv:79: $finish called at 11906000 (1ps)
+imagenes CERBERO: 1216 bundles; datos inicializados 0 bytes desde 0x2000
+IMEM: /tmp/nova-rtl.aq8Ba6/imem.hex
+DMEM: /tmp/nova-rtl.aq8Ba6/dmem.hex
+=== ejecutable Nova sobre el RTL CERBERO ===
+  ciclos: 10264
+  retorno R6: 192 (0x000000c0)
+  scribe en DMEM del procesador (0 valores):
+RESULTADO: OK
+test/tb_nova_rtl.sv:79: $finish called at 102746000 (1ps)
+
+fin de la evidencia

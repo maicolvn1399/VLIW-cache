@@ -1,0 +1,26 @@
+functio principale() -> integer {
+    varia matriz : integer[10][100];
+    varia fila : integer = 0;
+    varia columna : integer = 0;
+
+    per (fila = 0; fila < longitudo(matriz); fila += 1) {
+        per (columna = 0;
+             columna < longitudo(matriz[0]); columna += 1) {
+            matriz[fila][columna] = fila * 100 + columna;
+            si (fila == 5 et columna == 37) {
+                matriz[fila][columna] = 5000;
+            }
+        }
+    }
+
+    per (fila = 0; fila < longitudo(matriz); fila += 1) {
+        per (columna = 0;
+             columna < longitudo(matriz[0]); columna += 1) {
+            si (matriz[fila][columna] > matriz[0][0]) {
+                matriz[0][0] = matriz[fila][columna];
+            }
+        }
+    }
+
+    redde matriz[0][0];
+}

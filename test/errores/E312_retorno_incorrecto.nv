@@ -1,0 +1,6 @@
+functio contar() -> integer {
+    redde verum;
+}
+functio principale() -> integer {
+    redde contar();
+}

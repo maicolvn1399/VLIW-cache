@@ -1,0 +1,5 @@
+# Un archivo sin principale es un modulo de biblioteca: puede compilarse con
+# -c y enlazarse desde el programa que define principale.
+functio doble(n : integer) -> integer {
+    redde n * 2;
+}

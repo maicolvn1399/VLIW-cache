@@ -1,0 +1,5 @@
+functio f(x : integer) -> nihil {
+    si (x = 1) {
+        redde;
+    }
+}

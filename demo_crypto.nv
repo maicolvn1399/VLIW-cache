@@ -1,0 +1,38 @@
+# =============================================================================
+# demo_crypto.nv - La parte distintiva del ISA: la boveda y Feistel4.
+# Compilador NOVA (CE1108) sobre el procesador CERBERO (CE4301)
+#
+# Abre sesion en la boveda, instala una llave y cifra un bloque de 64 bits.
+# Las intrinsecas del lenguaje bajan directo a instrucciones del slot S3:
+#
+#   ingredere(clave)              -> AUTHW x4 + LOGIN
+#   custodi(ranura, k0,k1,k2,k3)  -> KSETW x4
+#   feistel(bloque, ranura, i)    -> F4E
+#
+# Una ronda de (0xDEADBEEF, 0xCAFEBABE) con key[0] = 0x11111111:
+#
+#   F(x,k) = (ROL32(x,5) + k) XOR ROL32(x,13)
+#   L nueva = R vieja          = 0xCAFEBABE
+#   R nueva = L XOR F(R, k)    = 0x79120F5A
+#
+#   RESULTADO ESPERADO: 0  (la convencion aqui es que 0 = todo bien)
+#
+# OJO: necesita que ROT_SECRET del procesador coincida con la clave que pide
+# ingredere. Ver el comando en el README de esta carpeta.
+# =============================================================================
+
+functio cifrar_una_ronda(bloque : integer[]) -> nihil {
+    si (ingredere(0x76543210)) {
+        custodi(0, 0x11111111, 0x22222222, 0x33333333, 0x44444444);
+        feistel(bloque, 0, 0);
+    }
+}
+
+functio principale() -> integer {
+    varia bloque : integer[2] = {0xDEADBEEF, 0xCAFEBABE};
+    cifrar_una_ronda(bloque);
+    si (bloque[0] == 0xCAFEBABE et bloque[1] == 0x79120F5A) {
+        redde 0;
+    }
+    redde 1;
+}

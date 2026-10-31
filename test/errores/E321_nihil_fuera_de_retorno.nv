@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    varia x : nihil;
+    redde 0;
+}

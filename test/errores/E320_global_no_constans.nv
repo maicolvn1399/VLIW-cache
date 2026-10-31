@@ -1,0 +1,4 @@
+varia contador : integer = 0;
+functio principale() -> integer {
+    redde 0;
+}

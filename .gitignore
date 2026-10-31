@@ -1,41 +1,37 @@
-# --- Simulación (Icarus / GTKWave) ---
-*.vvp
-*.vcd
-*.fst
-*.lxt
-*.lxt2
-*.out
+# Lo que genera la construccion
+novac
 *.o
+*.d
 
-# --- Verilator ---
-obj_dir/
+# Lo que generan bison y flex
+fase2_sintactico/nova.tab.c
+fase2_sintactico/nova.tab.h
+fase2_sintactico/nova.output
+fase1_lexico/lex.yy.c
 
-# --- Herramientas EDA ---
-*.log
-work/
-*.key
+# Temporales de los scripts de prueba
+.tmp_*
 
-# --- Python (ensamblador y herramienta de carga) ---
-__pycache__/
-
-# --- Binarios que produce el ensamblador (los regenera "make asm") ---
-tools/programas/*.hex
-*.pyc
-.venv/
-
-# --- Sistema operativo / editor ---
-.DS_Store
-Thumbs.db
-desktop.ini
-.vscode/
-
-# --- Artefactos de simulacion generados en src/build ---
-src/build/*.vvp
-src/build/*.vcd
-
-# Salidas de las simulaciones y de make correr
-src/build/*.hex
-src/build/*.bin
-src/build/*.lst
-src/build/*.txt
-src/build/llave_gen/
+# Ejecutables de CERBERO: 'novac programa.nv' deja un binario con el nombre
+# del fuente, sin extension, asi que se ignoran por nombre.
+a.out
+factorial
+saludo
+traza
+mergesort
+multiplicacion
+bits_y_hex
+busqueda_matriz
+desplazamientos
+operadores
+matriz
+estadistica
+convolucion
+rango
+div_cero
+boveda
+cola
+W0[0-9][0-9]_*
+!W0[0-9][0-9]_*.nv
+E[0-9][0-9][0-9]_*
+!E[0-9][0-9][0-9]_*.nv

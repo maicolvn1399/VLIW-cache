@@ -1,0 +1,17 @@
+functio principale() -> integer {
+    varia original : integer[3][2];
+    varia transpuesta : integer[2][3];
+
+    per (varia fila : integer = 0; fila < longitudo(original); fila += 1) {
+        per (varia columna : integer = 0;
+             columna < longitudo(original[0]); columna += 1) {
+            original[fila][columna] = fila * 10 + columna + 1;
+            transpuesta[columna][fila] = original[fila][columna];
+        }
+    }
+
+    si (transpuesta[0][2] != 21 aut transpuesta[1][2] != 22) {
+        redde -1;
+    }
+    redde transpuesta[0][2] * 100 + transpuesta[1][2];
+}

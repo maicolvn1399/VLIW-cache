@@ -1,0 +1,20 @@
+# espera: W008
+# El codigo que toca la boveda tiene que caber en los 256 bundles de la
+# region segura de CERBERO. Esta funcion se pasa a proposito.
+functio principale() -> integer {
+    varia v : integer[2] = {1, 2};
+    si (ingredere(1)) {
+        custodi(0, 0, 1, 2, 3);
+        feistel(v, 0, 0);
+        custodi(0, 1, 2, 3, 4);
+        feistel(v, 0, 1);
+        custodi(0, 2, 3, 4, 5);
+        feistel(v, 0, 2);
+        custodi(0, 3, 4, 5, 6);
+        feistel(v, 0, 3);
+        custodi(0, 4, 5, 6, 7);
+        feistel(v, 0, 0);
+        exi();
+    }
+    redde v[0];
+}

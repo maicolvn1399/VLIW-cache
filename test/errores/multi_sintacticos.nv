@@ -1,0 +1,7 @@
+# espera: E201 E202 E201
+functio f() -> integer {
+    varia x : integer = ;
+    varia y : integer = 2
+    redde y +;
+}
+functio g() -> integer { redde 0; }

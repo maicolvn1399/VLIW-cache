@@ -1,0 +1,40 @@
+# multiplicacion.nv -- multiplicacion de matrices con recursividad de cola
+functio imprimir(m : integer[][]) -> nihil {
+ per (varia i : integer = 0; i < longitudo(m); i += 1) {
+ per (varia j : integer = 0; j < longitudo(m[0]); j += 1) {
+ scribe(m[i][j]);
+ }
+ dic("");
+ }
+}
+@cauda
+functio multiplicar(a : integer[][], b : integer[][], c : integer[][],
+ i : integer, j : integer, k : integer, acumulado : integer) -> nihil {
+ si (i >= longitudo(a)) {
+ redde;
+ }
+ si (j >= longitudo(b[0])) {
+ multiplicar(a, b, c, i + 1, 0, 0, 0);
+ redde;
+ }
+ si (k >= longitudo(b)) {
+ c[i][j] = acumulado;
+ multiplicar(a, b, c, i, j + 1, 0, 0);
+ redde;
+ }
+ multiplicar(a, b, c, i, j, k + 1, acumulado + a[i][k] * b[k][j]);
+ redde;
+}
+functio principale() -> integer {
+ varia a : integer[2][3] = {{1, 2, 3},
+ {4, 5, 6}};
+ varia b : integer[3][2] = {{7, 8},{9, 10},{11, 12}};
+ varia c : integer[2][2];
+ si (longitudo(a[0]) != longitudo(b)) {
+ dic("error: dimensiones incompatibles");
+ redde 1;
+ }
+ multiplicar(a, b, c, 0, 0, 0, 0);
+ imprimir(c);
+ redde 0;
+}

@@ -1,0 +1,3 @@
+functio doble(n : integer) -> integer {
+    redde n * 2;
+}

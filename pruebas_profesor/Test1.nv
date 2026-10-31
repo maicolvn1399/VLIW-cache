@@ -1,0 +1,37 @@
+# Test1.nv -- suma de los primos de una lista.  Equivale a Test1.py.
+#   sume([1,2,3,4,5,6,7,8,9,11]) = 2+3+5+7+11 = 28
+#
+# Dos cosas del original no existen en Nova y se resuelven asi:
+#   - 'divisor=2' por omision: Nova no tiene valores por defecto, se pasa el 2.
+#   - 'global suma': Nova no admite globales mutables (E320), asi que el
+#     acumulador es local y se devuelve.
+
+functio es_primo(n : integer, divisor : integer) -> veritas {
+    si (n <= 1) {
+        redde falsum;
+    }
+    si (divisor * divisor > n) {
+        redde verum;
+    }
+    si (n % divisor == 0) {
+        redde falsum;
+    }
+    redde es_primo(n, divisor + 1);
+}
+
+functio sume(lista : integer[]) -> integer {
+    varia suma : integer = 0;
+    per (varia i : integer = 0; i < longitudo(lista); i += 1) {
+        si (es_primo(lista[i], 2)) {
+            suma += lista[i];
+        }
+    }
+    redde suma;
+}
+
+functio principale() -> integer {
+    varia datos : integer[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11};
+    varia r : integer = sume(datos);
+    scribe(r);
+    redde r;
+}

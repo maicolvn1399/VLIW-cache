@@ -1,0 +1,7 @@
+# El compilador genera la llamada con el nombre decorado modulo$simbolo y
+# deja que el enlazador la resuelva. Sin enlazador, es E401.
+importa "../modulos/calculos.nv" ut calc;
+
+functio principale() -> integer {
+    redde calc.sumar(1, 2);
+}

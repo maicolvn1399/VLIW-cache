@@ -1,0 +1,28 @@
+# busqueda_matriz.nv -- Ejercicio 2 del proyecto: buscar un elemento en una matriz
+# El resultado se devuelve por el parametro de salida 'pos' (fila, columna),
+# porque en Nova los arreglos no se pueden retornar.
+functio buscar(m : integer[][], objetivo : integer, pos : integer[]) -> veritas {
+    pos[0] = -1;
+    pos[1] = -1;
+    per (varia i : integer = 0; i < longitudo(m); i += 1) {
+        per (varia j : integer = 0; j < longitudo(m[0]); j += 1) {
+            si (m[i][j] == objetivo) {
+                pos[0] = i;
+                pos[1] = j;
+                redde verum;
+            }
+        }
+    }
+    redde falsum;
+}
+
+functio principale() -> integer {
+    varia m : integer[3][3] = {{1, 2, 3},
+                               {4, 5, 6},
+                               {7, 8, 9}};
+    varia pos : integer[2];
+    si (buscar(m, 6, pos)) {
+        redde pos[0] * 10 + pos[1];
+    }
+    redde -1;
+}

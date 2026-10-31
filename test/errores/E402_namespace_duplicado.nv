@@ -1,0 +1,5 @@
+importa "../modulos/matriz.nv";
+importa "../modulos/otro/matriz.nv";
+functio principale() -> integer {
+    redde 0;
+}

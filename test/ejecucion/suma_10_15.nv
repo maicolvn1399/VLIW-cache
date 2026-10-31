@@ -1,0 +1,3 @@
+functio principale() -> integer {
+    redde 10 + 15;
+}

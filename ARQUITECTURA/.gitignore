@@ -1,0 +1,41 @@
+# --- Simulación (Icarus / GTKWave) ---
+*.vvp
+*.vcd
+*.fst
+*.lxt
+*.lxt2
+*.out
+*.o
+
+# --- Verilator ---
+obj_dir/
+
+# --- Herramientas EDA ---
+*.log
+work/
+*.key
+
+# --- Python (ensamblador y herramienta de carga) ---
+__pycache__/
+
+# --- Binarios que produce el ensamblador (los regenera "make asm") ---
+tools/programas/*.hex
+*.pyc
+.venv/
+
+# --- Sistema operativo / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+
+# --- Artefactos de simulacion generados en src/build ---
+src/build/*.vvp
+src/build/*.vcd
+
+# Salidas de las simulaciones y de make correr
+src/build/*.hex
+src/build/*.bin
+src/build/*.lst
+src/build/*.txt
+src/build/llave_gen/

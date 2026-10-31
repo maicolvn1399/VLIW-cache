@@ -1,0 +1,9 @@
+importa "basicas.nv" ut base;
+
+functio triangular(n : integer) -> integer {
+    varia suma : integer = 0;
+    per (varia i : integer = 1; i <= n; i += 1) {
+        suma += i;
+    }
+    redde suma + base.factorial(5);
+}

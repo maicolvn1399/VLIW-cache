@@ -1,0 +1,14 @@
+# cola.nv -- recursividad de cola: @cauda la convierte en un salto, asi que
+# 500 niveles no deben desbordar la pila de 4 KB de CERBERO.
+@cauda
+functio sumar(n : integer, acumulado : integer) -> integer {
+    si (n == 0) {
+        redde acumulado;
+    }
+    redde sumar(n - 1, acumulado + n);
+}
+
+functio principale() -> integer {
+    scribe(sumar(500, 0));
+    redde 0;
+}

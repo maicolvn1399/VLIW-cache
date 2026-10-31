@@ -1,0 +1,33 @@
+# Test4.nv -- transponer una matriz.  Equivale a Test4.py.
+#   transponer_matriz([[1,2,3],[4,5,6]]) = [[1,4],[2,5],[3,6]]
+#
+# Python arma la salida con listas dinamicas y .append().  Nova tiene
+# arreglos de tamano fijo, asi que la transpuesta se recibe ya dimensionada
+# como parametro de salida.  Se imprimen los seis elementos en orden y se
+# devuelve su suma, 21, para poder comprobarlo desde el retorno.
+
+functio transponer_matriz(matriz : integer[][], transpuesta : integer[][]) -> nihil {
+    varia filas : integer = longitudo(matriz);
+    varia columnas : integer = longitudo(matriz[0]);
+    per (varia j : integer = 0; j < columnas; j += 1) {
+        per (varia i : integer = 0; i < filas; i += 1) {
+            transpuesta[j][i] = matriz[i][j];
+        }
+    }
+}
+
+functio principale() -> integer {
+    varia m : integer[2][3] = {{1, 2, 3}, {4, 5, 6}};
+    varia t : integer[3][2] = {{0, 0}, {0, 0}, {0, 0}};
+    varia suma : integer = 0;
+
+    transponer_matriz(m, t);
+
+    per (varia j : integer = 0; j < 3; j += 1) {
+        per (varia i : integer = 0; i < 2; i += 1) {
+            scribe(t[j][i]);
+            suma += t[j][i];
+        }
+    }
+    redde suma;
+}

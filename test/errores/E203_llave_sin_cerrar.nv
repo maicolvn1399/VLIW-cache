@@ -1,0 +1,6 @@
+functio uno() -> integer {
+    redde 1;
+
+functio principale() -> integer {
+    redde uno();
+}

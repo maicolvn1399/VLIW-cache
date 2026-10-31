@@ -1,0 +1,8 @@
+functio mayor(a : integer, b : integer) -> integer {
+    si (a > b) {
+        redde a;
+    }
+}
+functio principale() -> integer {
+    redde mayor(1, 2);
+}

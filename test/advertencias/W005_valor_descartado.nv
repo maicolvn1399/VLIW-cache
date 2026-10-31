@@ -1,0 +1,7 @@
+functio suma(a : integer, b : integer) -> integer {
+    redde a + b;
+}
+functio principale() -> integer {
+    suma(1, 2);
+    redde 0;
+}

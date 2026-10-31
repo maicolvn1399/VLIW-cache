@@ -1,0 +1,7 @@
+# boveda.nv -- usar la boveda sin autenticar: debe terminar con 137.
+functio principale() -> integer {
+    varia par : integer[2] = {1, 2};
+    feistel(par, 0, 0);
+    scribe(par[0]);
+    redde 0;
+}

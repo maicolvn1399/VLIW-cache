@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    varia sobrante : integer = 7;
+    redde 0;
+}

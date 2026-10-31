@@ -1,0 +1,3 @@
+functio f() -> nihil {
+    varia x = 5;
+}

@@ -1,0 +1,14 @@
+# Test6.nv -- fibonacci recursivo.  Equivale a Test6.py del profesor.
+#   fibonacci(10) = 55
+functio fibonacci(n : integer) -> integer {
+    si (n <= 1) {
+        redde n;
+    }
+    redde fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+functio principale() -> integer {
+    varia r : integer = fibonacci(10);
+    scribe(r);
+    redde r;
+}

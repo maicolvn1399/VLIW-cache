@@ -1,0 +1,19 @@
+functio factorial(n : integer) -> integer {
+    varia resultado : integer = 1;
+    varia i : integer = 1;
+
+    dum (i <= n) {
+        resultado = resultado * i;
+        i = i + 1;
+    }
+
+    redde resultado;
+}
+
+functio principale() -> integer {
+    varia i : integer = 1907;
+    scribe(i);
+    scribe(factorial(3));
+    redde factorial(6);
+    
+}

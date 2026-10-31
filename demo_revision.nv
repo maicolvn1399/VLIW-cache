@@ -1,0 +1,36 @@
+# =============================================================================
+# demo_revision.nv - Programa de ejemplo para la revision.
+# Compilador NOVA (CE1108) sobre el procesador CERBERO (CE4301)
+#
+# Ejercita lo que normalmente se pide ver: lazos, condicionales, llamadas a
+# funcion con parametros y retorno, arreglos e indexado.
+#
+#   suma de los cuadrados de 1 a 7 = 1+4+9+16+25+36+49 = 140
+#   maximo de {10, 30, 20, 5}                          =  30
+#   RESULTADO ESPERADO                       140 - 30  = 110   (0x6E)
+# =============================================================================
+
+functio suma_cuadrados(n : integer) -> integer {
+    varia acc : integer = 0;
+    varia i   : integer = 1;
+    dum (i <= n) {
+        acc = acc + i * i;
+        i = i + 1;
+    }
+    redde acc;
+}
+
+functio maximo(v : integer[], n : integer) -> integer {
+    varia m : integer = v[0];
+    varia i : integer = 1;
+    dum (i < n) {
+        si (v[i] > m) { m = v[i]; }
+        i = i + 1;
+    }
+    redde m;
+}
+
+functio principale() -> integer {
+    varia datos : integer[4] = {10, 30, 20, 5};
+    redde suma_cuadrados(7) - maximo(datos, 4);
+}

@@ -1,0 +1,5 @@
+constans LIMITE : integer = 10;
+functio principale() -> integer {
+    LIMITE = 20;
+    redde 0;
+}

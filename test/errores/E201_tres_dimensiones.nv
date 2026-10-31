@@ -1,0 +1,3 @@
+functio f() -> nihil {
+    varia a : integer[2][2][2];
+}

@@ -1,0 +1,9 @@
+# espera: E101 E201 E201 E105 E201 E201
+functio principale() -> integer {
+    varia a : integer = 1 $ 2;
+    varia b : integer = ;
+    varia c : integer = 7xyz;
+    varia d : integer = ) ;
+    varia e : integer = * 3;
+    redde 0;
+}

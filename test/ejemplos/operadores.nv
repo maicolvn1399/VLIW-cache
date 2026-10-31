@@ -1,0 +1,40 @@
+# operadores.nv -- ejercita los operadores compuestos, rumpe/perge,
+# textus, el desplazamiento aritmetico y la importacion con alias.
+importa "matriz.nv" ut mat;
+
+functio etiqueta(n : integer) -> textus {
+    si (n < 0) {
+        redde "negativo";
+    }
+    redde "no negativo";
+}
+
+functio reduce(v : integer[], tope : integer) -> integer {
+    varia total : integer = 0;
+    per (varia i : integer = 0; i < longitudo(v); i += 1) {
+        si (v[i] == 0) {
+            perge;
+        }
+        si (v[i] > tope) {
+            rumpe;
+        }
+        total += v[i];
+        total -= 1;
+        total *= 3;
+        total /= 2;
+        total %= 1000;
+    }
+    redde total;
+}
+
+functio principale() -> integer {
+    varia v : integer[5] = {1, 0, 2, 3, 9};
+    varia mascara : integer = 0xF0 >> 4;
+    varia negativo : integer = -256 >> 4;
+    dic(etiqueta(-1));
+    scribe(reduce(v, 3));
+    scribe(mascara);
+    scribe(negativo);
+    scribe(mat.limitar(4, 0, 3));
+    redde 0;
+}

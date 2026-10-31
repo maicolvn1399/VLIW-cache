@@ -1,0 +1,5 @@
+importa "calculos.nv" ut calc;
+
+functio principale() -> integer {
+    redde calc.triangular(10);
+}

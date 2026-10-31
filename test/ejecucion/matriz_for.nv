@@ -1,0 +1,16 @@
+functio principale() -> integer {
+    varia matriz : integer[3][4];
+    varia total : integer = 0;
+    per (varia fila : integer = 0; fila < longitudo(matriz); fila += 1) {
+        per (varia columna : integer = 0;
+             columna < longitudo(matriz[0]); columna += 1) {
+            matriz[fila][columna] = fila * 10 + columna;
+        }
+    }
+    per (varia i : integer = 0; i < longitudo(matriz); i += 1) {
+        per (varia j : integer = 0; j < longitudo(matriz[0]); j += 1) {
+            total += matriz[i][j];
+        }
+    }
+    redde total;
+}

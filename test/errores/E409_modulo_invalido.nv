@@ -1,0 +1,4 @@
+importa "mi-libreria.nv";
+functio principale() -> integer {
+    redde 0;
+}

@@ -1,0 +1,16 @@
+# Test2.nv -- maximo de una lista.  Equivale a Test2.py.
+# Es un modulo de biblioteca: no tiene 'principale', igual que el original,
+# cuyo print esta comentado.  Test3.nv lo importa.
+#
+# El 'raise ValueError' de lista vacia lo obvia el propio enunciado del
+# profesor; en Nova una lista vacia haria que el 'per' no itere y devuelva 0.
+
+functio maximo_lista(lista : integer[]) -> integer {
+    varia maximo : integer = lista[0];
+    per (varia i : integer = 0; i < longitudo(lista); i += 1) {
+        si (lista[i] > maximo) {
+            maximo = lista[i];
+        }
+    }
+    redde maximo;
+}

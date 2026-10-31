@@ -1,0 +1,44 @@
+# convolucion.nv -- convolucion 2D con importacion de dos archivos
+importa "matriz";
+importa "estadistica";
+constans LADO : integer = 5;
+functio convolucionar(imagen : integer[][], kernel : integer[][], salida :
+ integer[][]) -> nihil {
+ varia alto : integer = longitudo(imagen);
+ varia ancho : integer = longitudo(imagen[0]);
+ varia radio : integer = longitudo(kernel) / 2;
+ per (varia y : integer = 0; y < alto; y += 1) {
+ per (varia x : integer = 0; x < ancho; x += 1) {
+ varia suma : integer = 0;
+ per (varia dy : integer = -radio; dy <= radio; dy += 1) {
+ per (varia dx : integer = -radio; dx <= radio; dx += 1) {
+ varia fy : integer = matriz.limitar(y + dy, 0, alto - 1);
+ varia fx : integer = matriz.limitar(x + dx, 0, ancho - 1);
+ suma += imagen[fy][fx] * kernel[dy + radio][dx + radio];
+ }
+ }
+ salida[y][x] = suma;
+ }
+ }
+}
+functio principale() -> integer {
+ varia imagen : integer[LADO][LADO] = {{10, 10, 10, 10, 10},
+ {10, 50, 50, 50, 10},
+ {10, 50, 90, 50, 10},
+ {10, 50, 50, 50, 10},
+ {10, 10, 10, 10, 10}};
+ varia kernel : integer[3][3] = {{ 0, -1, 0},
+ {-1, 5, -1},
+ { 0, -1, 0}};
+ varia salida : integer[LADO][LADO];
+ si (non matriz.es_impar(longitudo(kernel))) {
+ dic("error: el kernel debe tener lado impar");
+ redde 1;
+ }
+ convolucionar(imagen, kernel, salida);
+ dic("resultado:");
+ matriz.imprimir(salida);
+ dic("promedio =", estadistica.promedio(salida));
+ dic("maximo =", estadistica.maximo(salida));
+ redde 0;
+}

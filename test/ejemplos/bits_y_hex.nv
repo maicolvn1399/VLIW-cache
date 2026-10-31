@@ -1,0 +1,25 @@
+# bits_y_hex.nv -- literales hexadecimales y operadores de bits (rotacion de Feistel)
+constans MASCARA : integer = 0xDEADBEEF;
+constans BAJO : integer = 0x0F;
+constans MAYUS : integer = 0X1F;
+
+functio rotar(x : integer, r : integer) -> integer {
+    redde (x << r) | (x >>> (32 - r));
+}
+
+functio es_par(x : integer) -> veritas {
+    redde (x & 1) == 0;
+}
+
+functio mezclar(l : integer, r : integer, k : integer) -> integer {
+    redde l ^ ((r + k) & MASCARA) ^ ~BAJO;
+}
+
+functio principale() -> integer {
+    varia a : integer = 0xFF;
+    a = rotar(a, 8) ^ 0xA5;
+    si (non es_par(a) et a >= 0 aut a != 0x00) {
+        redde mezclar(a, 1, 0x1F);
+    }
+    redde 0;
+}

@@ -1,0 +1,12 @@
+# div_cero.nv -- division entre cero en ejecucion: debe terminar con 136.
+# El divisor viene de una funcion para que no sea una constante que la
+# fase 3 pueda rechazar con E316.
+functio cero() -> integer {
+    redde 0;
+}
+
+functio principale() -> integer {
+    varia d : integer = cero();
+    scribe(10 / d);
+    redde 0;
+}

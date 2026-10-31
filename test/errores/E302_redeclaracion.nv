@@ -1,0 +1,5 @@
+functio principale() -> integer {
+    varia a : integer = 1;
+    varia a : integer = 2;
+    redde a;
+}

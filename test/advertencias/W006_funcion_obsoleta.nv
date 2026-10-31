@@ -1,0 +1,7 @@
+@obsoletum("usa suma2 en su lugar")
+functio suma(a : integer, b : integer) -> integer {
+    redde a + b;
+}
+functio principale() -> integer {
+    redde suma(1, 2);
+}

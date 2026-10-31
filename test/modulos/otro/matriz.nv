@@ -1,0 +1,3 @@
+functio constante() -> integer {
+    redde 1;
+}

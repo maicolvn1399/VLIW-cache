@@ -1,0 +1,25 @@
+functio principale() -> integer {
+    varia a : integer[2][3];
+    varia b : integer[3][2];
+    varia c : integer[2][2];
+    per (varia fila_a : integer = 0; fila_a < 2; fila_a += 1) {
+        per (varia col_a : integer = 0; col_a < 3; col_a += 1) {
+            a[fila_a][col_a] = fila_a * 3 + col_a + 1;
+        }
+    }
+    per (varia fila_b : integer = 0; fila_b < 3; fila_b += 1) {
+        per (varia col_b : integer = 0; col_b < 2; col_b += 1) {
+            b[fila_b][col_b] = fila_b * 2 + col_b + 7;
+        }
+    }
+    per (varia fila_c : integer = 0; fila_c < 2; fila_c += 1) {
+        per (varia col_c : integer = 0; col_c < 2; col_c += 1) {
+            varia suma : integer = 0;
+            per (varia comun : integer = 0; comun < 3; comun += 1) {
+                suma += a[fila_c][comun] * b[comun][col_c];
+            }
+            c[fila_c][col_c] = suma;
+        }
+    }
+    redde c[0][0] + c[0][1] + c[1][0] + c[1][1];
+}

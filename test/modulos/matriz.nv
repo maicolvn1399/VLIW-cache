@@ -1,0 +1,3 @@
+functio identidad(n : integer) -> integer {
+    redde n;
+}

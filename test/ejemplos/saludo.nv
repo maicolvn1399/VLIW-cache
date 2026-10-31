@@ -1,0 +1,9 @@
+# saludo.nv -- literales de cadena y la zona de salida.
+# El ISA no define puertos de E/S, asi que scribe y dic escriben en una zona
+# de memoria que las herramientas de CE 4301 leen: primero la longitud de la
+# cadena y despues sus caracteres, una palabra cada cuatro.
+functio principale() -> integer {
+    dic("Salve, munde");
+    scribe(42);
+    redde 0;
+}

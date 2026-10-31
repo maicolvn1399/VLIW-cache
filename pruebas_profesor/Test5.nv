@@ -1,0 +1,40 @@
+# Test5.nv -- multiplicar dos matrices.  Equivale a Test5.py.
+#   [[1,2],[3,4]] x [[5,6],[7,8]] = [[19,22],[43,50]]
+#
+# Igual que Test4: el resultado se recibe ya dimensionado, porque Nova no
+# tiene listas dinamicas.  Se imprimen los cuatro elementos y se devuelve su
+# suma, 134.
+
+functio multiplicar_matrices(a : integer[][], b : integer[][],
+                             resultado : integer[][]) -> nihil {
+    varia filasA : integer = longitudo(a);
+    varia columnasA : integer = longitudo(a[0]);
+    varia columnasB : integer = longitudo(b[0]);
+
+    per (varia i : integer = 0; i < filasA; i += 1) {
+        per (varia j : integer = 0; j < columnasB; j += 1) {
+            varia suma : integer = 0;
+            per (varia k : integer = 0; k < columnasA; k += 1) {
+                suma += a[i][k] * b[k][j];
+            }
+            resultado[i][j] = suma;
+        }
+    }
+}
+
+functio principale() -> integer {
+    varia a : integer[2][2] = {{1, 2}, {3, 4}};
+    varia b : integer[2][2] = {{5, 6}, {7, 8}};
+    varia c : integer[2][2] = {{0, 0}, {0, 0}};
+    varia suma : integer = 0;
+
+    multiplicar_matrices(a, b, c);
+
+    per (varia i : integer = 0; i < 2; i += 1) {
+        per (varia j : integer = 0; j < 2; j += 1) {
+            scribe(c[i][j]);
+            suma += c[i][j];
+        }
+    }
+    redde suma;
+}

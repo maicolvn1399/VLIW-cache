@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    scribe("sin cierre);
+    redde 0;
+}

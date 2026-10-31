@@ -1,0 +1,15 @@
+functio cifrar_un_rondo(bloque : integer[]) -> nihil {
+    si (ingredere(0x76543210)) {
+        custodi(0, 0x11111111, 0x22222222, 0x33333333, 0x44444444);
+        feistel(bloque, 0, 0);
+    }
+}
+
+functio principale() -> integer {
+    varia bloque : integer[2] = {0xDEADBEEF, 0xCAFEBABE};
+    cifrar_un_rondo(bloque);
+    si (bloque[0] == 0xCAFEBABE et bloque[1] == 0x79120F5A) {
+        redde 0;
+    }
+    redde 1;
+}

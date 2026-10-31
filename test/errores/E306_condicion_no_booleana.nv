@@ -1,0 +1,7 @@
+functio principale() -> integer {
+    varia n : integer = 3;
+    si (n) {
+        redde 1;
+    }
+    redde 0;
+}

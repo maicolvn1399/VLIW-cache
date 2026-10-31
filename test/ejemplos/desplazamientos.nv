@@ -1,0 +1,11 @@
+# desplazamientos.nv -- los tres desplazamientos de Nova son instrucciones
+# distintas en CERBERO: << es sll, >> es sra (con signo) y >>> es srl (ceros).
+functio principale() -> integer {
+    varia a : integer = 0xF0;
+    varia b : integer = -256;
+    scribe(a << 4);      # 3840
+    scribe(a >> 4);      # 15
+    scribe(b >> 4);      # -16          aritmetico: conserva el signo
+    scribe(b >>> 4);     # 268435440    logico: rellena con ceros
+    redde 0;
+}

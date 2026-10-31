@@ -1,0 +1,21 @@
+# matriz.nv -- archivo 1 de la convolucion (se importa desde convolucion.nv)
+functio limitar(v : integer, minimo : integer, maximo : integer) -> integer {
+ si (v < minimo) {
+ redde minimo;
+ } sin (v > maximo) {
+ redde maximo;
+ } aliter {
+ redde v;
+ }
+}
+functio imprimir(m : integer[][]) -> nihil {
+ per (varia i : integer = 0; i < longitudo(m); i += 1) {
+ per (varia j : integer = 0; j < longitudo(m[0]); j += 1) {
+ scribe(m[i][j]);
+ }
+ dic("");
+ }
+}
+functio es_impar(n : integer) -> veritas {
+ redde n % 2 == 1;
+}

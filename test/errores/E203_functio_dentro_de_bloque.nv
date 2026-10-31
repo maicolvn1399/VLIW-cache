@@ -1,0 +1,6 @@
+functio f() -> integer {
+    redde 0;
+
+functio g() -> integer {
+    redde 1;
+}

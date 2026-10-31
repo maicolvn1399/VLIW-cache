@@ -1,0 +1,41 @@
+# Test3.nv -- acumula el maximo hasta pasar de 100.  Equivale a Test3.py.
+#   sumeMayores([10,2,3,4]) = (100, 10)
+#
+# Tres cosas del original no existen en Nova y se resuelven asi:
+#   - 'global suma, multiplicacion': no hay globales mutables, son locales.
+#   - devolver la tupla (suma, multiplicacion): se devuelve por un arreglo
+#     de salida, igual que hace busqueda_matriz.nv con la posicion.
+#   - 'valorMaximo/2' en Python es division real (5.0); en Nova es entera.
+#     Para estos valores da lo mismo: 10/2 == 5 en ambos.
+importa "Test2";
+
+functio sumeMayores(lista : integer[], salida : integer[]) -> nihil {
+    varia suma : integer = 0;
+    varia multiplicacion : integer = 1;
+
+    dum (suma < 100) {
+        varia valorMaximo : integer = Test2.maximo_lista(lista);
+        si (valorMaximo / 2 == 5) {
+            valorMaximo *= 2;
+        }
+        suma += valorMaximo;
+        multiplicacion *= valorMaximo;
+        si (multiplicacion > 500) {
+            multiplicacion = 10;
+        } aliter {
+            multiplicacion = multiplicacion - 10;
+        }
+    }
+
+    salida[0] = suma;
+    salida[1] = multiplicacion;
+}
+
+functio principale() -> integer {
+    varia datos : integer[4] = {10, 2, 3, 4};
+    varia par : integer[2] = {0, 0};
+    sumeMayores(datos, par);
+    scribe(par[0]);
+    scribe(par[1]);
+    redde par[0] + par[1];
+}
