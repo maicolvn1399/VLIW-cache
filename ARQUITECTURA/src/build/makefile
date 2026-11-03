@@ -499,7 +499,7 @@ etapas: reg_if_id reg_id_ex reg_ex_mem pipeline latency fetch fetch_flow wconf t
 # bundle las operaciones que son independientes, respetando la latencia de
 # tres, los puertos de escritura y el orden de la memoria. Lo que el programa
 # hace es cosa del programador; cuantos bundles tarda, de la herramienta.
-.PHONY: ocupacion empacar vliw-comparar
+.PHONY: ocupacion empacar vliw-comparar metricas
 ocupacion:
 	@echo ""
 	@echo "---- cuanto del bundle se usa, programa por programa ----"
@@ -508,6 +508,33 @@ ocupacion:
 empacar:
 	@test -n "$(PROG)" || { echo "error: falta PROG=programa.s"; exit 2; }
 	python3 $(TOOLS)/empacar.py $(if $(findstring /,$(PROG)),$(PROG),$(PROGS)/$(PROG))
+
+# ---- Linea base de rendimiento ----------------------------------------------
+# "make ocupacion" cuenta lo que el programa TRAE, leyendo el fuente. Esto mide
+# lo que el procesador HIZO, con los contadores de hardware de perf_counters.sv
+# y los programas corriendo de verdad hasta HALT.
+#
+#   make metricas       corre los programas y arma la tabla de linea base
+#
+# Es la referencia contra la que se van a comparar las iteraciones con cache:
+# los ciclos de aqui son los de un procesador cuya memoria responde siempre en
+# un ciclo, que es justamente la suposicion que la Iteracion 2 elimina.
+#
+# Quedan fuera cifrar_archivo y descifrar_archivo, que necesitan una imagen de
+# memoria de datos (make cifrar los corre con ella).
+PROGS_METRICAS := fibonacci estadisticas contar_hasta_n div32_prueba feistel \
+                  lazo_estres sesion_sin_logout suma_10_15 \
+                  suma_simple_emp suma_vliw_emp
+
+.PHONY: metricas
+metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp
+	@rm -f metricas_*.txt
+	@for p in $(PROGS_METRICAS); do \
+	    echo "  corriendo $$p..."; \
+	    $(MAKE) -s correr PROG=$$p.s RESULTADO=metricas_$$p.txt \
+	            ESCRITURAS= > /dev/null || exit 1; \
+	done
+	@python3 $(TOOLS)/tabla_metricas.py metricas_*.txt
 
 # La comparacion de la demostracion VLIW, fuera del testbench, para enseñarla
 # con los dos programas a la vista
@@ -562,6 +589,6 @@ clean:
 	rm -f *.vvp *.vcd cifrado_volcado.hex cifrado_volcado.bin
 	rm -f archivo_libre.hex cifrado_libre.hex cifrado_libre.bin
 	rm -f contenedor_libre.hex descifrado_libre.hex descifrado_libre.bin
-	rm -f criptograma.bin programa.hex programa_datos.hex programa.lst programa_texto.txt resultado_*.txt escrituras_*.txt
+	rm -f criptograma.bin programa.hex programa_datos.hex programa.lst programa_texto.txt resultado_*.txt escrituras_*.txt metricas_*.txt
 	rm -rf llave_gen
 	rm -f $(PROGS)/*.hex

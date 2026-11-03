@@ -1,0 +1,8 @@
+#{ Copia exacta de 'promedio'. Solo cambian el formato y los comentarios,
+   que es la definicion de clon Tipo I. }#
+functio promedio(datos : integer[], n : integer) -> integer {
+    varia suma : integer = 0;       # acumulador
+    varia i : integer = 0;
+    dum (i < n) { suma = suma + datos[i]; i = i + 1; }
+    redde suma / n;
+}

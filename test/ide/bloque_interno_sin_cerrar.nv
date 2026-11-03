@@ -1,0 +1,12 @@
+functio contar(n : integer) -> integer {
+    varia total : integer = 0;
+    varia i : integer = 0;
+    dum (i < n) {
+        total = total + i;
+        i = i + 1;
+    redde total;
+}
+
+functio principale() -> integer {
+    redde contar(5);
+}

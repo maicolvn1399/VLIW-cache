@@ -1,0 +1,14 @@
+functio acumular(datos : integer[], n : integer) -> integer {
+    varia total : integer = 0;
+    varia i : integer = 0;
+    dum (i < n) {
+        total = total + datos[i];
+        i = i + 1; tot
+    }
+    redde total;
+}
+
+functio principale() -> integer {
+    varia v : integer[2] = {3, 4};
+    redde acumular(v, 2);
+}

@@ -1,0 +1,21 @@
+# Ciclo con condicionales anidados: ejercita cabeza de lazo, dos ramas,
+# reunion de caminos y arista de regreso.
+functio clasificar(v : integer, n : integer) -> integer {
+    varia r : integer = 0;
+    varia i : integer = 0;
+    dum (i < n) {
+        si (v > 100) {
+            r = r + 2;
+        } aliter {
+            si (v > 50) {
+                r = r + 1;
+            }
+        }
+        i = i + 1;
+    }
+    redde r;
+}
+
+functio principale() -> integer {
+    redde clasificar(75, 3);
+}

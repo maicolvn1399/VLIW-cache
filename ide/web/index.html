@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nova IDE</title>
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+
+<header class="barra">
+  <div class="marca">
+    <span class="logo">N</span>
+    <div>
+      <strong>Nova IDE</strong>
+      <small>CE1108 &middot; compilador para CERBERO</small>
+    </div>
+  </div>
+
+  <div class="archivo-activo">
+    <input id="nombre-archivo" value="editor.nv" spellcheck="false" aria-label="Nombre del archivo">
+    <span id="sucio" class="punto-sucio" hidden title="Cambios sin guardar"></span>
+  </div>
+
+  <div class="acciones">
+    <button id="btn-guardar" class="btn">Guardar</button>
+    <label class="selector">
+      Compilar
+      <select id="modo-compilar">
+        <option value="binario">binario .nvx</option>
+        <option value="tokens">tokens (fase 1)</option>
+        <option value="ast">AST (fase 2)</option>
+        <option value="simbolos">tabla de simbolos (fase 3)</option>
+        <option value="ir">codigo de tres direcciones</option>
+        <option value="ensamblador">ensamblador CERBERO</option>
+        <option value="paquetes">bundles y slots</option>
+      </select>
+    </label>
+    <button id="btn-compilar" class="btn btn-primario">Ejecutar</button>
+  </div>
+
+  <div id="estado" class="estado">
+    <span class="pastilla" id="pastilla-clase" hidden title=""></span>
+    <span class="pastilla" id="pastilla-estado">listo</span>
+  </div>
+</header>
+
+<main class="disposicion">
+
+  <aside class="lateral">
+    <div class="lateral-titulo">
+      Archivos del proyecto
+      <button id="btn-recargar" class="btn-mini" title="Recargar lista">&#8635;</button>
+    </div>
+    <input id="filtro-archivos" class="filtro" placeholder="filtrar..." spellcheck="false">
+    <ul id="lista-archivos" class="lista-archivos"></ul>
+
+    <div class="lateral-titulo lateral-titulo-sep">Abiertos</div>
+    <ul id="lista-abiertos" class="lista-archivos"></ul>
+  </aside>
+
+  <section class="centro">
+    <div class="editor" id="editor">
+      <div class="gutter" id="gutter" aria-hidden="true"></div>
+      <div class="lienzo" id="lienzo">
+        <pre class="capa-pintada" id="pintado" aria-hidden="true"></pre>
+        <pre class="capa-subrayado" id="subrayado" aria-hidden="true"></pre>
+        <textarea id="codigo" spellcheck="false" autocomplete="off"
+                  autocorrect="off" autocapitalize="off" wrap="off"
+                  aria-label="Editor de codigo Nova"></textarea>
+      </div>
+    </div>
+
+    <div id="popup" class="popup" hidden>
+      <ul id="popup-lista"></ul>
+      <div id="popup-doc" class="popup-doc"></div>
+    </div>
+
+    <div id="globo" class="globo" hidden></div>
+  </section>
+
+  <section class="panel">
+    <nav class="pestanas" id="pestanas">
+      <button class="pestana activa" data-panel="problemas">Problemas <span class="contador" id="c-problemas">0</span></button>
+      <button class="pestana" data-panel="correcciones">Correcciones <span class="contador" id="c-correcciones">0</span></button>
+      <button class="pestana" data-panel="simbolos">Tabla de simbolos <span class="contador" id="c-simbolos">0</span></button>
+      <button class="pestana" data-panel="flujo">Flujo <span class="contador" id="c-flujo">0</span></button>
+      <button class="pestana" data-panel="clones">Clones <span class="contador" id="c-clones">0</span></button>
+      <button class="pestana" data-panel="salida">Salida</button>
+      <button id="btn-expandir" class="btn-expandir">Ampliar panel</button>
+    </nav>
+
+    <div class="panel-cuerpo">
+      <div class="vista activa" id="v-problemas"></div>
+      <div class="vista" id="v-correcciones"></div>
+      <div class="vista" id="v-simbolos"></div>
+      <div class="vista" id="v-flujo">
+        <div class="flujo-barra">
+          <label>Funcion
+            <select id="flujo-funcion"></select>
+          </label>
+          <span id="flujo-datos" class="flujo-datos"></span>
+          <button id="btn-flujo" class="btn btn-primario">Construir grafo</button>
+        </div>
+        <div class="flujo-cuerpo">
+          <div class="flujo-lienzo" id="flujo-lienzo"></div>
+          <aside class="flujo-detalle" id="flujo-detalle"></aside>
+        </div>
+      </div>
+
+      <div class="vista" id="v-clones">
+        <div class="clones-barra">
+          <label>Tokens minimos
+            <input type="number" id="clones-min" value="20" min="1" max="2000">
+          </label>
+          <label>Umbral Tipo III
+            <input type="number" id="clones-umbral" value="0.80" min="0.1" max="1" step="0.01">
+          </label>
+          <label class="check">
+            <input type="checkbox" id="clones-todo" checked>
+            incluir todos los archivos del proyecto
+          </label>
+          <button id="btn-clones" class="btn btn-primario">Buscar clones</button>
+        </div>
+        <div id="clones-resultado"></div>
+      </div>
+      <div class="vista" id="v-salida"><pre class="salida" id="salida-texto">Sin ejecuciones todavia.</pre></div>
+    </div>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+#{ Funcion sin relacion con las anteriores. No debe reportarse como clon
+   de ninguna de ellas. }#
+functio ordenar_par(a : integer, b : integer, c : integer) -> integer {
+    varia salida : integer = 0;
+    si (a > b) {
+        salida = salida + 1;
+    }
+    si (b > c) {
+        salida = salida + 2;
+    }
+    si (a > c) {
+        salida = salida + 4;
+    }
+    redde salida * 3;
+}

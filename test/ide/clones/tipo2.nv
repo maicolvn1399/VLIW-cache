@@ -1,0 +1,11 @@
+#{ Misma estructura que 'promedio' con los nombres cambiados de forma
+   sistematica: clon Tipo II con renombrado consistente. }#
+functio media(valores : integer[], cantidad : integer) -> integer {
+    varia acumulado : integer = 0;
+    varia k : integer = 0;
+    dum (k < cantidad) {
+        acumulado = acumulado + valores[k];
+        k = k + 1;
+    }
+    redde acumulado / cantidad;
+}

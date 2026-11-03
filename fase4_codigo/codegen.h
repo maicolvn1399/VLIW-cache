@@ -36,6 +36,29 @@ bool codegen_generate_vliw(TACList *tac, SymbolTable *st, FILE *out);
  * programa ya relajado del generador. */
 bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st);
 
+/*
+ * Tabla de etiquetas resueltas: los puntos de salto de condicionales y ciclos
+ * con la direccion que les toco.
+ *
+ * El calculo ya existia -- es lo que resuelve los saltos-- pero el resultado
+ * solo se veia como comentario dentro del .asm. La guia del curso pide en la
+ * Fase 3 "registrar puntos de salto (etiquetas) y sus direcciones en memoria
+ * para condicionales y ciclos", asi que la tabla tambien tiene que poder
+ * consultarse junto a la de simbolos, que es donde se la busca.
+ *
+ * La copia se toma dentro de codegen_update_symbol_layout(), antes de liberar
+ * las estructuras del generador, y sobrevive hasta la siguiente llamada.
+ */
+typedef struct {
+    const char *nombre;
+    uint32_t    direccion;   /* en bytes */
+    int         bundle;      /* indice de bundle en IMEM; -1 si es dato */
+    int         es_dato;     /* 1 si vive en DMEM, 0 si es codigo en IMEM */
+} CodegenEtiqueta;
+
+/* Deja en *out la tabla y devuelve cuantas entradas tiene. */
+int codegen_etiquetas(const CodegenEtiqueta **out);
+
 /* Muestra cada bundle con su dirección, slots de ensamblador y bytes emitidos. */
 bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out);
 

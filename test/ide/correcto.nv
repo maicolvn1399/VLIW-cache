@@ -1,0 +1,9 @@
+functio doble(n : integer) -> integer {
+    redde n * 2;
+}
+
+functio principale() -> integer {
+    varia r : integer = doble(21);
+    scribe(r);
+    redde 0;
+}

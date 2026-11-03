@@ -1,0 +1,13 @@
+functio clasificar(v : integer) -> integer {
+    varia r : integer = 0;
+    si (v > 100) {
+        r = 2;
+    aliter {
+        r = 1;
+    }
+    redde r;
+}
+
+functio principale() -> integer {
+    redde clasificar(50);
+}

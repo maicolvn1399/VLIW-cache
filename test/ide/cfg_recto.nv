@@ -1,0 +1,9 @@
+# Sin saltos: toda la funcion es un solo bloque basico.
+functio sumar(a : integer, b : integer) -> integer {
+    varia t : integer = a + b;
+    redde t;
+}
+
+functio principale() -> integer {
+    redde sumar(2, 3);
+}

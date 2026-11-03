@@ -1,0 +1,19 @@
+# Programa de ejemplo en Nova.
+# Escriba aqui: el analisis corre solo mientras escribe.
+
+functio factorial(n : integer) -> integer {
+    varia resultado : integer = 1;
+    varia i : integer = 1;
+
+    dum (i <= n) {
+        resultado = resultado * i;
+        i = i + 1;
+    }
+
+    redde resultado;
+}
+
+functio principale() -> integer {
+    scribe(factorial(6));
+    redde 0;
+}

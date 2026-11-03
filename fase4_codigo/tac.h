@@ -140,6 +140,13 @@ TACList *tac_generate_from_ast(Nodo *root, SymbolTable *st);
 /* --- Salida legible (--ir) --- */
 void tac_print(FILE *out, TACList *list);
 
+/*
+ * Una sola instruccion, con su salto de linea. La comparten '--ir', el grafo
+ * de flujo y el IDE, para que la misma instruccion se vea igual en todas las
+ * vistas.
+ */
+void tac_print_inst(FILE *out, const TACInst *i);
+
 /* --- Consultas que necesita codegen.c --- */
 bool tac_es_temporal(const char *nombre);
 /* Busca un local o parametro por funcion y nombre. */

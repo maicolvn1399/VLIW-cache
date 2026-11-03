@@ -84,6 +84,15 @@
 // por la herramienta de carga.
 //
 // -----------------------------------------------------------------------------
+// LOS CONTADORES NO SON PARTE DEL DATAPATH
+// -----------------------------------------------------------------------------
+// perf_counters.sv se instancia aqui porque necesita ver ID (el bundle
+// completo, su validez y la decision de la BRU) y el estado de HALT, y este es
+// el unico archivo donde esas tres cosas coinciden. Es la unica unidad del
+// procesador cuyas salidas no van a ninguna otra: solo salen al exterior, para
+// el testbench. Si se quitara, ningun programa cambiaria de resultado.
+//
+// -----------------------------------------------------------------------------
 // AUTH NO SE DUPLICA
 // -----------------------------------------------------------------------------
 // Los bits AUTH y AUTHFAIL del PSW son cables directos desde key_vault, que es
@@ -121,7 +130,20 @@ module top #(
     // ---- Observacion, para el testbench y para la placa ---------------------
     output logic                          halted,
     output logic [`XLEN-1:0]              psw,
-    output logic [`NREGS-1:0][`XLEN-1:0]  dbg_regs
+    output logic [`NREGS-1:0][`XLEN-1:0]  dbg_regs,
+
+    // ---- Contadores de rendimiento (perf_counters.sv) -----------------------
+    // Salidas de medicion, no de ejecucion: ninguna entra de vuelta al
+    // datapath. Van sin conectar en los testbenches que no miden nada.
+    output logic [31:0]                   perf_ciclos,
+    output logic [31:0]                   perf_bundles,
+    output logic [31:0]                   perf_instrucciones,
+    output logic [`NSLOTS-1:0][31:0]      perf_ops_slot,
+    output logic [31:0]                   perf_bundles_vacios,
+    output logic [31:0]                   perf_saltos,
+    output logic [31:0]                   perf_delay_vacios,
+    output logic [31:0]                   perf_stall,
+    output logic                          perf_desbordado
 );
 
   // ===========================================================================
@@ -715,6 +737,37 @@ module top #(
       .write_index  (wb_widx),
       .psw          (psw),
       .wconf_any    (psw_wconf)
+  );
+
+  // ===========================================================================
+  // MEDICION
+  //
+  // Los contadores miran ID, que es donde el bundle existe completo: los cinco
+  // slots, su validez y la decision de la BRU. No devuelven nada al datapath.
+  //
+  // La entrada stall va en cero porque hoy ningun bundle se detiene: no hay
+  // riesgos estructurales (microarchitecture.md 11.2). La Iteracion 3 le
+  // conecta aqui la senal cache_stall de la jerarquia de memoria, y ese es el
+  // unico cambio que hara falta para que las cuentas sigan siendo correctas.
+  // ===========================================================================
+
+  perf_counters u_perf (
+      .clk            (clk),
+      .rst_n          (rst_n),
+      .id_valid       (id_valid),
+      .id_bundle      (id_bundle),
+      .id_taken       (id_taken),
+      .halted         (halted),
+      .stall          (1'b0),
+      .ciclos         (perf_ciclos),
+      .bundles        (perf_bundles),
+      .instrucciones  (perf_instrucciones),
+      .ops_por_slot   (perf_ops_slot),
+      .bundles_vacios (perf_bundles_vacios),
+      .saltos_tomados (perf_saltos),
+      .delay_vacios   (perf_delay_vacios),
+      .ciclos_stall   (perf_stall),
+      .desbordado     (perf_desbordado)
   );
 
 endmodule

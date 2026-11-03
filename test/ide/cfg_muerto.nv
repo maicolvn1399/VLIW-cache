@@ -1,0 +1,5 @@
+# Codigo despues de un retorno: queda en un bloque inalcanzable.
+functio principale() -> integer {
+    redde 0;
+    scribe("nunca");
+}

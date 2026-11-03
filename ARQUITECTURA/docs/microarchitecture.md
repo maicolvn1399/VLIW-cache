@@ -556,6 +556,7 @@ versión.
 | `reg_ex_mem.sv` | EX → MEM | Lleva escrituras, fallas y banderas | `tb_reg_ex_mem.sv` |
 | `load_align.sv` | MEM | Extrae el dato pedido de la palabra leída | `tb_lsu.sv` |
 | `psw_fault_unit.sv` | WB | PSW, detección de `WCONF`, registro de fallas | `tb_psw_fault_unit.sv`, `tb_wconf.sv` |
+| `perf_counters.sv` | ID (observa) | Contadores de rendimiento; no devuelve nada al datapath. Ver [`metricas.md`](metricas.md) | `tb_perf_counters.sv` |
 | `cerbero_defs.svh` | | Constantes de la ISA | |
 
 `tb_pipeline.sv` y `tb_latency.sv` miden la latencia de 3 bundles sobre los registros de segmentación reales.

@@ -261,6 +261,53 @@ static void nota(const char *fmt, ...) {
     n_notas++;
 }
 
+/*
+ * Copia de la tabla de etiquetas que sobrevive a liberar_todo().
+ *
+ * construir_programa() resuelve cada etiqueta a su bundle y liberar_todo()
+ * borra esas estructuras enseguida, asi que sin esta copia la informacion se
+ * pierde apenas termina la fase 4. Se toma antes de liberar para que --sym y
+ * el IDE puedan mostrar los puntos de salto con su direccion.
+ */
+static CodegenEtiqueta *etq_copia = NULL;
+static int n_etq_copia = 0;
+
+static void liberar_copia_etiquetas(void) {
+    for (int i = 0; i < n_etq_copia; i++) free((char *)etq_copia[i].nombre);
+    free(etq_copia);
+    etq_copia = NULL;
+    n_etq_copia = 0;
+}
+
+static void guardar_etiquetas(void) {
+    liberar_copia_etiquetas();
+    int total = n_etqs + n_etqs_dato;
+    if (total <= 0) return;
+
+    etq_copia = malloc((size_t)total * sizeof(CodegenEtiqueta));
+    if (etq_copia == NULL) return;          /* sin memoria: se queda sin tabla */
+
+    for (int i = 0; i < n_etqs_dato; i++) {
+        etq_copia[n_etq_copia].nombre    = dup_o_nulo(etqs_dato[i].nombre);
+        etq_copia[n_etq_copia].direccion = (uint32_t)etqs_dato[i].direccion;
+        etq_copia[n_etq_copia].bundle    = -1;
+        etq_copia[n_etq_copia].es_dato   = 1;
+        n_etq_copia++;
+    }
+    for (int i = 0; i < n_etqs; i++) {
+        etq_copia[n_etq_copia].nombre    = dup_o_nulo(etqs[i].nombre);
+        etq_copia[n_etq_copia].direccion = (uint32_t)etqs[i].bundle * 16u;
+        etq_copia[n_etq_copia].bundle    = etqs[i].bundle;
+        etq_copia[n_etq_copia].es_dato   = 0;
+        n_etq_copia++;
+    }
+}
+
+int codegen_etiquetas(const CodegenEtiqueta **out) {
+    if (out != NULL) *out = etq_copia;
+    return n_etq_copia;
+}
+
 static int buscar_etiqueta(const char *nombre) {
     for (int i = 0; i < n_etqs; i++)
         if (strcmp(etqs[i].nombre, nombre) == 0) return etqs[i].bundle;
@@ -1764,6 +1811,8 @@ bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
                 symtab_set_function_address(st, i->result,
                                             (uint32_t)bundle * 16u);
         }
+        /* Antes de liberar: la tabla de saltos resueltos se guarda aparte. */
+        guardar_etiquetas();
     }
     liberar_todo();
     return ok;

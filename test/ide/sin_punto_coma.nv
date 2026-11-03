@@ -1,0 +1,7 @@
+functio principale() -> integer {
+    varia a : integer = 1
+    varia b : integer = 2
+    a = a + b
+    scribe(a)
+    redde 0;
+}

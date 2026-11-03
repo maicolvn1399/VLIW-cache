@@ -1,6 +1,35 @@
 #ifndef DIAG_H
 #define DIAG_H
 
+/*
+ * Modo captura (lo usa el IDE).
+ *
+ * Con la captura activa, diag_error y diag_advertencia dejan de escribir en
+ * stderr y guardan cada diagnostico como un registro estructurado. Ademas no
+ * se aborta el proceso al llegar al maximo de errores: el IDE necesita la
+ * lista completa de lo que encontro, no un corte a mitad de camino.
+ *
+ * El compilador de linea de comandos nunca enciende este modo, asi que su
+ * comportamiento observable no cambia en nada.
+ */
+#define DIAG_MAX_CAPTURA 400
+#define DIAG_MAX_MENSAJE 512
+
+typedef struct {
+    char severidad[16];   /* "error" o "advertencia" */
+    char codigo[16];      /* E302, W001, ... */
+    char archivo[512];
+    int  linea;
+    int  columna;
+    int  largo;
+    char mensaje[DIAG_MAX_MENSAJE];
+} DiagRegistro;
+
+void diag_capturar(int activo);
+int  diag_capturados(void);
+const DiagRegistro *diag_capturado(int i);
+void diag_limpiar_captura(void);
+
 /* Helpers para reportar errores de manera uniforme en todas las fases. */
 void diag_iniciar(const char *archivo);
 /* Cambia el archivo asociado a los diagnosticos sin reiniciar sus contadores. */

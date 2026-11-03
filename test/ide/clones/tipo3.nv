@@ -1,0 +1,13 @@
+#{ Copia de 'promedio' con una variable y una sentencia agregadas:
+   clon Tipo III. }#
+functio promedio_contado(datos : integer[], n : integer) -> integer {
+    varia suma : integer = 0;
+    varia contados : integer = 0;
+    varia i : integer = 0;
+    dum (i < n) {
+        suma = suma + datos[i];
+        contados = contados + 1;
+        i = i + 1;
+    }
+    redde suma / contados;
+}

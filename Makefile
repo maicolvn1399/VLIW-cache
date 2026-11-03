@@ -4,34 +4,61 @@ PARSE_DIR := fase2_sintactico
 SEM_DIR := fase3_semantico
 GEN_DIR := fase4_codigo
 
+OPT_DIR := fase6_optimizacion
+IDE_DIR := fase5_ide
+
 BIN := novac
+IDE_BIN := novaide
 # -MMD -MP genera los .d con las dependencias de encabezados: cambiar un .h
 # recompila lo que lo incluye. Sin esto, editar symtab.h dejaba objetos
 # compilados contra estructuras distintas.
-CFLAGS := -Wall -Wextra -g -MMD -MP -I$(LEX_DIR) -I$(PARSE_DIR) -I$(SEM_DIR) -I$(GEN_DIR)
+CFLAGS := -Wall -Wextra -g -MMD -MP -I$(LEX_DIR) -I$(PARSE_DIR) -I$(SEM_DIR) -I$(GEN_DIR) -I$(OPT_DIR) -I$(IDE_DIR)
 
 SRCS = main.c \
        $(LEX_DIR)/diag.c \
        $(PARSE_DIR)/ast.c \
+       $(PARSE_DIR)/enlace.c \
        $(PARSE_DIR)/nova.tab.c \
        $(LEX_DIR)/lex.yy.c \
        $(SEM_DIR)/symtab.c \
        $(SEM_DIR)/semantic.c \
        $(GEN_DIR)/tac.c \
-       $(GEN_DIR)/codegen.c
+       $(GEN_DIR)/codegen.c \
+       $(OPT_DIR)/bloques.c
 
 OBJS = $(SRCS:.c=.o)
-DEPS = $(OBJS:.o=.d)
 
-.PHONY: all prueba test tabla arbol ensamblador binario paquetes ocupacion entregables generar generar-prueba ejecutar-prueba ejecutar-prueba-rtl prueba-rtl prueba-rtl-simple prueba-rtl-integracion prueba-rtl-objeto prueba-rtl-matriz prueba-rtl-matriz-1000 prueba-rtl-transpuesta prueba-rtl-producto-punto prueba-rtl-multiplicacion prueba-rtl-busqueda prueba-rtl-factorial prueba-rtl-propuesto prueba-rtl-crypto prueba-rtl-cifrado prueba-rtl-descifrado depurar verificar clean limpiar
+# El IDE comparte con el compilador las fases 1 a 4: las mismas unidades, no
+# una copia. Por eso novaide enlaza $(NUCLEO_OBJS), que es $(OBJS) sin main.o.
+# Lo que el editor marca sale literalmente del mismo analizador que compila.
+NUCLEO_OBJS = $(filter-out main.o,$(OBJS))
 
-all: $(BIN)
+IDE_SRCS = $(IDE_DIR)/novaide.c \
+           $(IDE_DIR)/jsonw.c \
+           $(IDE_DIR)/ide_util.c \
+           $(IDE_DIR)/ide_lex.c \
+           $(IDE_DIR)/ide_catalogo.c \
+           $(IDE_DIR)/ide_diag.c \
+           $(IDE_DIR)/ide_completar.c \
+           $(IDE_DIR)/ide_arreglar.c \
+           $(IDE_DIR)/ide_clones.c \
+           $(IDE_DIR)/ide_bloques.c
+
+IDE_OBJS = $(IDE_SRCS:.c=.o)
+DEPS = $(OBJS:.o=.d) $(IDE_OBJS:.o=.d)
+
+.PHONY: all ide prueba-ide bloques prueba test tabla arbol ensamblador binario paquetes ocupacion entregables generar generar-prueba ejecutar-prueba ejecutar-prueba-rtl prueba-rtl prueba-rtl-simple prueba-rtl-integracion prueba-rtl-objeto prueba-rtl-matriz prueba-rtl-matriz-1000 prueba-rtl-transpuesta prueba-rtl-producto-punto prueba-rtl-multiplicacion prueba-rtl-busqueda prueba-rtl-factorial prueba-rtl-propuesto prueba-rtl-crypto prueba-rtl-cifrado prueba-rtl-descifrado depurar verificar clean limpiar
+
+all: $(BIN) $(IDE_BIN)
 
 $(BIN): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
+$(IDE_BIN): $(IDE_OBJS) $(NUCLEO_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(IDE_OBJS) $(NUCLEO_OBJS)
+
 # Asegura que nova.tab.h exista antes de intentar compilar cualquier .o
-$(OBJS): $(PARSE_DIR)/nova.tab.h
+$(OBJS) $(IDE_OBJS): $(PARSE_DIR)/nova.tab.h
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -41,6 +68,18 @@ $(PARSE_DIR)/nova.tab.c $(PARSE_DIR)/nova.tab.h: $(PARSE_DIR)/nova.y
 
 $(LEX_DIR)/lex.yy.c: $(LEX_DIR)/nova.l $(PARSE_DIR)/nova.tab.h $(PARSE_DIR)/ast.h $(LEX_DIR)/diag.h
 	flex -o $@ $<
+
+# ---------------------------------------------------------------- IDE
+#
+# 'make ide' levanta la interfaz; la logica ya esta compilada en novaide, que
+# se construye junto al compilador porque comparten las fases 1 a 4.
+ide: $(BIN) $(IDE_BIN)
+	python3 ide/servidor.py
+
+# Las pruebas del IDE corren contra el binario, no contra la interfaz: lo que
+# hay que garantizar es el comportamiento de la logica en C.
+prueba-ide: $(BIN) $(IDE_BIN)
+	@python3 test/ide/correr_pruebas.py
 
 prueba test: $(BIN)
 	@sh test/run_tests.sh ./$(BIN)
@@ -210,7 +249,7 @@ verificar: $(BIN)
 # Cualquiera de las tres que falle detiene el make, asi que si esto termina
 # bien, los dos proyectos estan de acuerdo.
 .PHONY: todo cerbero
-todo: test cerbero prueba-rtl
+todo: test prueba-ide cerbero prueba-rtl
 	@echo ""
 	@echo "=============================================================="
 	@echo " Compilador NOVA y procesador CERBERO: la cadena completa paso"
@@ -228,8 +267,9 @@ cerbero:
 # que generan bison y flex, el ejecutable del compilador y cualquier
 # ejecutable de CERBERO que haya quedado de una corrida manual.
 clean:
-	rm -f $(BIN) $(OBJS) $(DEPS) \
+	rm -f $(BIN) $(IDE_BIN) $(OBJS) $(IDE_OBJS) $(DEPS) \
 	      $(PARSE_DIR)/nova.tab.* $(PARSE_DIR)/nova.output $(LEX_DIR)/lex.yy.c
+	rm -f test/ide/.arreglando.nv test/ide/.muchos_errores.nv
 	rm -f .tmp_nova_sum.nvx .tmp_nova_imem.hex .tmp_nova_dmem.hex .tmp_nova_rtl.vvp
 	rm -f .prueba_rtl.vvp
 	rm -f .salida/*.nvx .salida/*.asm .salida/*.asm.stdout .salida/*.svg .salida/*.paquetes.txt

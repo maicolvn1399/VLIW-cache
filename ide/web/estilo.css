@@ -1,0 +1,850 @@
+/*
+ * Hoja de estilo del IDE de Nova.
+ *
+ * Hay una regla que no es estetica sino funcional: la capa pintada, la capa de
+ * subrayados y el textarea tienen que coincidir caracter por caracter. Comparten
+ * por eso la misma familia monoespaciada, el mismo tamano, el mismo interlineado,
+ * el mismo relleno y el mismo tab-size. Cualquier diferencia entre ellas corre el
+ * color o el subrayado respecto del texto real.
+ */
+
+:root {
+  --fondo:        #11131a;
+  --fondo-2:      #171a23;
+  --fondo-3:      #1d212c;
+  --borde:        #272c3a;
+  --borde-suave:  #1f2430;
+
+  --texto:        #d6dae6;
+  --texto-tenue:  #8b93a7;
+  --texto-debil:  #5f6778;
+
+  --acento:       #6ea8fe;
+  --acento-tenue: #28406b;
+  --verde:        #4ec9a5;
+  --rojo:         #f2622a;
+  --rojo-claro:   #ff6b6b;
+  --ambar:        #e2b341;
+  --violeta:      #c08cf5;
+  --naranja:      #e8a06a;
+
+  --mono: "JetBrains Mono", "Fira Code", "Cascadia Mono", "SF Mono",
+          "DejaVu Sans Mono", "Consolas", monospace;
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+        Arial, sans-serif;
+
+  --tam-codigo: 13.5px;
+  --alto-linea: 21px;
+  --relleno-codigo: 12px;
+  --ancho-gutter: 58px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: var(--ui);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+
+/* ------------------------------------------------------------ barra */
+
+.barra {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 52px;
+  padding: 0 16px;
+  background: var(--fondo-2);
+  border-bottom: 1px solid var(--borde);
+}
+
+.marca { display: flex; align-items: center; gap: 10px; }
+
+.logo {
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, var(--acento), var(--violeta));
+  color: #0d1017;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.marca strong { display: block; font-size: 13px; letter-spacing: .2px; }
+.marca small { display: block; color: var(--texto-debil); font-size: 11px; }
+
+.archivo-activo { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+
+#nombre-archivo {
+  width: 230px;
+  padding: 6px 10px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+#nombre-archivo:focus { outline: none; border-color: var(--acento); }
+
+.punto-sucio {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ambar);
+}
+
+.acciones { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.btn {
+  padding: 7px 13px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.btn:hover { background: #242a37; border-color: #343b4d; }
+.btn:active { transform: translateY(1px); }
+
+.btn-primario {
+  background: var(--acento-tenue);
+  border-color: #38538a;
+  color: #dce8ff;
+}
+.btn-primario:hover { background: #2f4a7d; }
+
+.btn-mini {
+  padding: 2px 7px;
+  background: none;
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  color: var(--texto-tenue);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.2;
+}
+.btn-mini:hover { color: var(--texto); border-color: #39415a; }
+
+.selector {
+  display: flex; align-items: center; gap: 7px;
+  padding: 4px 6px 4px 11px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  color: var(--texto-tenue);
+  font-size: 12px;
+}
+.selector select {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 3px 2px;
+}
+.selector select:focus { outline: none; }
+.selector option { background: var(--fondo-3); }
+
+.estado { min-width: 150px; text-align: right; }
+
+.pastilla {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 20px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  color: var(--texto-tenue);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.pastilla.ok    { color: var(--verde);      border-color: #255747; background: #14241f; }
+.pastilla.mal   { color: var(--rojo-claro); border-color: #5e2a2a; background: #241518; }
+.pastilla.aviso { color: var(--ambar);      border-color: #5a4720; background: #241f14; }
+.pastilla.trabajando { color: var(--acento); border-color: #2f4068; background: #141a26; }
+
+/* -------------------------------------------------------- disposicion */
+
+.disposicion {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  grid-template-rows: 1fr 300px;
+  height: calc(100% - 52px);
+}
+
+.lateral {
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--fondo-2);
+  border-right: 1px solid var(--borde);
+  overflow: hidden;
+}
+
+.lateral-titulo {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 12px 7px;
+  color: var(--texto-debil);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .9px;
+  text-transform: uppercase;
+}
+.lateral-titulo-sep { border-top: 1px solid var(--borde-suave); margin-top: 4px; }
+
+.filtro {
+  margin: 0 12px 8px;
+  padding: 5px 9px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  font-size: 12px;
+}
+.filtro:focus { outline: none; border-color: var(--acento); }
+
+.lista-archivos {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 10px;
+  overflow-y: auto;
+  flex: 0 1 auto;
+}
+.lista-archivos li {
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;          /* al truncar, se pierde el prefijo, no el nombre */
+  text-align: left;
+}
+.lista-archivos li:hover { background: var(--fondo-3); color: var(--texto); }
+.lista-archivos li.activo { background: var(--acento-tenue); color: #dce8ff; }
+.lista-archivos li .marca-sucia { color: var(--ambar); }
+
+/* ------------------------------------------------------------ editor */
+
+.centro { position: relative; overflow: hidden; background: var(--fondo); }
+
+.editor { display: flex; height: 100%; overflow: hidden; }
+
+.gutter {
+  width: var(--ancho-gutter);
+  flex: none;
+  padding: var(--relleno-codigo) 8px var(--relleno-codigo) 0;
+  background: var(--fondo-2);
+  border-right: 1px solid var(--borde-suave);
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--tam-codigo);
+  line-height: var(--alto-linea);
+  text-align: right;
+  color: var(--texto-debil);
+  user-select: none;
+}
+.gutter .ln { height: var(--alto-linea); position: relative; }
+.gutter .ln.con-error  { color: var(--rojo-claro); font-weight: 600; }
+.gutter .ln.con-aviso  { color: var(--ambar); }
+.gutter .ln.actual     { color: var(--texto); }
+.gutter .ln::before {
+  content: "";
+  position: absolute;
+  left: 2px; top: 7px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+}
+.gutter .ln.con-error::before { background: var(--rojo-claro); }
+.gutter .ln.con-aviso::before { background: var(--ambar); }
+
+.lienzo { position: relative; flex: 1; overflow: auto; }
+
+/* Las tres capas comparten metrica exacta. */
+.capa-pintada, .capa-subrayado, #codigo {
+  margin: 0;
+  padding: var(--relleno-codigo) 18px var(--relleno-codigo) 10px;
+  font-family: var(--mono);
+  font-size: var(--tam-codigo);
+  line-height: var(--alto-linea);
+  tab-size: 4;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-wrap: normal;
+  border: none;
+  min-height: 100%;
+  min-width: 100%;
+}
+
+.capa-pintada, .capa-subrayado {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.capa-subrayado { color: transparent; }
+
+#codigo {
+  position: relative;
+  display: block;
+  width: 100%;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--acento);
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+#codigo::selection { background: #2d4875; }
+
+/* Colores del coloreado, a partir de las categorias que entrega el lexer. */
+.t-reservada  { color: var(--violeta); }
+.t-tipo       { color: var(--acento); }
+.t-nombre     { color: var(--texto); }
+.t-numero     { color: var(--naranja); }
+.t-cadena     { color: var(--verde); }
+.t-literal    { color: var(--naranja); }
+.t-operador   { color: #9aa3b8; }
+.t-puntuacion { color: #6f788c; }
+.t-comentario { color: var(--texto-debil); font-style: italic; }
+
+/*
+ * Subrayado ondulado bajo el fragmento exacto que reporta el compilador.
+ *
+ * El texto de esta capa es transparente, pero la decoracion lleva su propio
+ * color y se dibuja igual. 'skip-ink: none' evita que la onda se interrumpa
+ * bajo las letras con descendente, que sobre un subrayado de uno o dos
+ * caracteres lo dejaria casi invisible. El tinte de fondo da el segundo
+ * indicio: la onda sola es facil de pasar por alto en una pantalla de
+ * proyector, que es donde se va a ver esto en la defensa.
+ */
+.capa-subrayado .sub {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-skip-ink: none;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 2px;
+}
+.capa-subrayado .sub-error {
+  text-decoration-color: var(--rojo-claro);
+  background: rgba(255, 107, 107, .13);
+}
+.capa-subrayado .sub-advertencia {
+  text-decoration-color: var(--ambar);
+  background: rgba(226, 179, 65, .13);
+}
+
+/* ------------------------------------------------- popup de completado */
+
+/*
+ * 'display' explicito gana sobre el atributo hidden, asi que sin esta regla el
+ * popup seguiria ocupando espacio y capturando los clics del editor aun estando
+ * oculto. Lo mismo vale para el globo.
+ */
+.popup[hidden], .globo[hidden], .pastilla[hidden],
+.punto-sucio[hidden] { display: none !important; }
+
+.popup {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  max-width: 640px;
+  background: var(--fondo-3);
+  border: 1px solid #343b4d;
+  border-radius: 8px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.55);
+  overflow: hidden;
+}
+.popup ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 268px;
+  min-width: 290px;
+  overflow-y: auto;
+}
+.popup li {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.popup li.sel { background: var(--acento-tenue); }
+.popup li .nom { font-family: var(--mono); font-size: 12.5px; }
+.popup li .nom b { color: var(--acento); font-weight: 700; }
+.popup li.sel .nom b { color: #bdd6ff; }
+.popup li .cls {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #242a37;
+  color: var(--texto-debil);
+  font-size: 10px;
+  letter-spacing: .4px;
+}
+.popup li.sel .cls { background: #2c4472; color: #a8c4f5; }
+
+.popup-doc {
+  width: 270px;
+  flex: none;
+  padding: 11px 13px;
+  background: var(--fondo-2);
+  border-left: 1px solid var(--borde);
+  color: var(--texto-tenue);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-y: auto;
+  max-height: 268px;
+}
+.popup-doc .firma {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--texto);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+.popup-doc .dir {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1a2231;
+  color: var(--acento);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------- globo de un error */
+
+.globo {
+  position: absolute;
+  z-index: 50;
+  max-width: 460px;
+  padding: 11px 14px;
+  background: var(--fondo-3);
+  border: 1px solid #3a4256;
+  border-left: 3px solid var(--rojo-claro);
+  border-radius: 7px;
+  box-shadow: 0 12px 34px rgba(0,0,0,.55);
+  font-size: 12px;
+  line-height: 1.55;
+  pointer-events: none;
+}
+.globo.aviso { border-left-color: var(--ambar); }
+.globo .cab { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.globo .cod {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #3a2328;
+  color: var(--rojo-claro);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.globo.aviso .cod { background: #3a3222; color: var(--ambar); }
+.globo .tit { font-weight: 600; }
+.globo .fase { margin-left: auto; color: var(--texto-debil); font-size: 10.5px; }
+.globo .msj { color: var(--texto); font-family: var(--mono); font-size: 11.5px; margin-bottom: 7px; }
+.globo .exp { color: var(--texto-tenue); margin-bottom: 7px; }
+.globo .rem { color: var(--verde); }
+.globo .rem::before { content: "Como se arregla: "; color: var(--texto-debil); }
+
+/* ------------------------------------------------------------- panel */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--fondo-2);
+  border-top: 1px solid var(--borde);
+  overflow: hidden;
+}
+
+.pestanas {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--fondo-2);
+  border-bottom: 1px solid var(--borde-suave);
+  flex: none;
+}
+.pestana {
+  padding: 9px 13px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--texto-debil);
+  cursor: pointer;
+  font-size: 12px;
+}
+.pestana:hover { color: var(--texto-tenue); }
+.pestana.activa { color: var(--texto); border-bottom-color: var(--acento); }
+.contador {
+  display: inline-block;
+  min-width: 17px;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #242a37;
+  color: var(--texto-debil);
+  font-size: 10px;
+  text-align: center;
+}
+.contador.hay { background: #4a2227; color: #ffb3b3; }
+.contador.aviso { background: #44381c; color: #ffd98a; }
+
+.panel-cuerpo { flex: 1; overflow: hidden; position: relative; }
+.vista {
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.vista.activa { display: block; }
+
+.fila {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+.fila:hover { background: var(--fondo-3); }
+.fila.error { border-left-color: var(--rojo-claro); }
+.fila.advertencia { border-left-color: var(--ambar); }
+.fila .pos {
+  flex: none;
+  min-width: 62px;
+  color: var(--acento);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.fila .cuerpo { flex: 1; min-width: 0; }
+.fila .linea1 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.fila .codigo {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #242a37;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.fila.error .codigo { background: #3a2328; color: var(--rojo-claro); }
+.fila.advertencia .codigo { background: #3a3222; color: var(--ambar); }
+.fila .mensaje { color: var(--texto); }
+.fila .detalle { margin-top: 3px; color: var(--texto-debil); font-size: 11.5px; line-height: 1.5; }
+.fila .remedio { margin-top: 3px; color: var(--verde); font-size: 11.5px; }
+
+.vacio {
+  padding: 28px 10px;
+  color: var(--texto-debil);
+  text-align: center;
+  font-size: 12px;
+}
+.vacio .grande { display: block; font-size: 22px; margin-bottom: 7px; opacity: .55; }
+
+.btn-aplicar {
+  flex: none;
+  padding: 4px 11px;
+  background: var(--acento-tenue);
+  border: 1px solid #38538a;
+  border-radius: 5px;
+  color: #dce8ff;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.btn-aplicar:hover { background: #2f4a7d; }
+
+.sello {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: .3px;
+}
+.sello-alta  { background: #16321f; color: #7fd99a; }
+.sello-media { background: #332a16; color: #e0bd72; }
+
+/* ------------------------------------------------------------- tablas */
+
+table.datos {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+table.datos th {
+  position: sticky;
+  top: -10px;
+  padding: 7px 9px;
+  background: var(--fondo-2);
+  border-bottom: 1px solid var(--borde);
+  color: var(--texto-debil);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  text-align: left;
+  text-transform: uppercase;
+}
+table.datos td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--borde-suave);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+table.datos tr:hover td { background: var(--fondo-3); }
+table.datos .dir { color: var(--acento); }
+table.datos .off { color: var(--texto-debil); }
+table.datos .nom { color: var(--texto); }
+table.datos .cls { color: var(--violeta); }
+table.datos .tip { color: var(--verde); }
+
+/* ------------------------------------------------------------- clones */
+
+.clones-barra {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 4px 2px 13px;
+  border-bottom: 1px solid var(--borde-suave);
+  margin-bottom: 11px;
+  color: var(--texto-tenue);
+  font-size: 11.5px;
+}
+.clones-barra input[type=number] {
+  width: 72px;
+  margin-left: 7px;
+  padding: 4px 7px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  font-family: var(--mono);
+}
+.clones-barra input:focus { outline: none; border-color: var(--acento); }
+.clones-barra .check { display: flex; align-items: center; gap: 6px; }
+.clones-barra button { margin-left: auto; }
+
+.resumen-clones {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-bottom: 13px;
+}
+.tarjeta {
+  flex: 1 1 110px;
+  padding: 10px 13px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 7px;
+}
+.tarjeta .n { display: block; font-size: 21px; font-weight: 600; line-height: 1.15; }
+.tarjeta .e { color: var(--texto-debil); font-size: 10.5px; letter-spacing: .4px; text-transform: uppercase; }
+.tarjeta.t1 .n { color: var(--rojo-claro); }
+.tarjeta.t2 .n { color: var(--ambar); }
+.tarjeta.t3 .n { color: var(--acento); }
+
+.clon {
+  margin-bottom: 9px;
+  padding: 11px 13px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-left: 3px solid var(--borde);
+  border-radius: 7px;
+}
+.clon.t1 { border-left-color: var(--rojo-claro); }
+.clon.t2 { border-left-color: var(--ambar); }
+.clon.t3 { border-left-color: var(--acento); }
+.clon .cab { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; flex-wrap: wrap; }
+.clon .tipo { font-weight: 600; }
+.clon.t1 .tipo { color: var(--rojo-claro); }
+.clon.t2 .tipo { color: var(--ambar); }
+.clon.t3 .tipo { color: var(--acento); }
+.clon .met {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #242a37;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.clon .lados { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.clon .lado {
+  padding: 7px 10px;
+  background: var(--fondo-2);
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.clon .lado:hover { background: #222736; }
+.clon .lado .arch { color: var(--acento); }
+.clon .lado .uni { color: var(--texto); }
+.clon .lado .loc { color: var(--texto-debil); font-size: 10.5px; }
+.clon .nota { margin-top: 8px; color: var(--texto-debil); font-size: 11px; line-height: 1.5; }
+
+.salida {
+  margin: 0;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.salida .ok  { color: var(--verde); }
+.salida .mal { color: var(--rojo-claro); }
+.salida .met { color: var(--acento); }
+
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2b3141; border-radius: 6px; border: 3px solid var(--fondo-2); }
+::-webkit-scrollbar-thumb:hover { background: #3a4254; }
+
+/* Chapa de clase del archivo (ejecutable / modulo): informativa, no de error. */
+.estado { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
+#pastilla-clase { background: #16202e; border-color: #2a3b55; color: var(--acento); }
+
+/* Encabezado de una seccion secundaria dentro de un panel. */
+.titulo-seccion {
+  margin: 22px 0 9px;
+  padding-top: 14px;
+  border-top: 1px solid var(--borde-suave);
+  color: var(--texto-tenue);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .7px;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------- grafo de flujo (Iteracion 2) */
+
+.flujo-barra {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 4px 2px 13px;
+  border-bottom: 1px solid var(--borde-suave);
+  margin-bottom: 11px;
+  color: var(--texto-tenue);
+  font-size: 11.5px;
+}
+.flujo-barra select {
+  margin-left: 7px;
+  padding: 4px 8px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.flujo-barra select:focus { outline: none; border-color: var(--acento); }
+.flujo-barra button { margin-left: auto; }
+
+.flujo-datos { display: flex; gap: 8px; flex-wrap: wrap; }
+.flujo-datos span {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--fondo-3);
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.flujo-datos span.alerta { background: #3a2328; color: var(--rojo-claro); }
+
+.flujo-cuerpo { display: grid; grid-template-columns: 1fr 320px; gap: 12px; }
+.flujo-lienzo { overflow: auto; background: var(--fondo-2); border-radius: 8px; padding: 10px; }
+.flujo-lienzo svg { display: block; }
+
+/* Nodos del grafo */
+.nodo rect {
+  fill: var(--fondo-3);
+  stroke: #39415a;
+  stroke-width: 1.3;
+  rx: 7;
+  transition: fill .12s, stroke .12s;
+}
+.nodo:hover rect { fill: #262d3d; stroke: var(--acento); cursor: pointer; }
+.nodo.sel rect { fill: var(--acento-tenue); stroke: var(--acento); }
+.nodo.entrada rect { stroke: var(--verde); }
+.nodo.muerto rect { stroke: var(--rojo-claro); stroke-dasharray: 4 3; }
+.nodo.lazo rect { fill: #1d2433; }
+.nodo .n-tit { fill: var(--texto); font: 600 12px var(--mono); }
+.nodo .n-sub { fill: var(--texto-debil); font: 10px var(--mono); }
+.nodo.sel .n-tit { fill: #dce8ff; }
+
+/* El subrayado de errores vive solo en la capa del editor. Sin esta
+ * restriccion, su clase .sub alcanzaba tambien a los textos del grafo. */
+
+.arista { fill: none; stroke: #4a5570; stroke-width: 1.5; marker-end: url(#punta); }
+.arista.regreso { stroke: var(--ambar); stroke-dasharray: 5 4; marker-end: url(#punta-lazo); }
+.arista.falso { stroke: #55607d; }
+
+.flujo-detalle {
+  overflow: auto;
+  background: var(--fondo-2);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 11.5px;
+}
+.flujo-detalle h4 {
+  margin: 0 0 9px;
+  color: var(--texto);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.flujo-detalle .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
+.flujo-detalle .meta span {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--fondo-3);
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.flujo-detalle pre {
+  margin: 0;
+  padding: 9px 11px;
+  background: var(--fondo);
+  border-radius: 6px;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.flujo-detalle pre b { color: var(--acento); font-weight: 400; cursor: pointer; }
+.flujo-detalle pre b:hover { text-decoration: underline; }
+.leyenda { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 11px; color: var(--texto-debil); font-size: 10.5px; }
+.leyenda i { display: inline-block; width: 16px; height: 0; border-top: 2px solid #4a5570; vertical-align: middle; margin-right: 5px; }
+.leyenda i.regreso { border-top: 2px dashed var(--ambar); }
+.leyenda i.caja { width: 11px; height: 11px; border: 1.5px solid var(--verde); border-radius: 3px; }
+.leyenda i.muerta { width: 11px; height: 11px; border: 1.5px dashed var(--rojo-claro); border-radius: 3px; }
+
+
+/* El panel inferior se puede agrandar: el grafo de flujo necesita altura. */
+body.panel-alto .disposicion { grid-template-rows: 1fr 72vh; }
+.btn-expandir {
+  margin-left: auto;
+  align-self: center;
+  padding: 3px 10px;
+  background: none;
+  border: 1px solid var(--borde);
+  border-radius: 5px;
+  color: var(--texto-debil);
+  cursor: pointer;
+  font-size: 11px;
+}
+.btn-expandir:hover { color: var(--texto); border-color: #39415a; }

@@ -13,12 +13,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "ast.h"
+#include "enlace.h"
 #include "diag.h"
 #include "nova.tab.h"
 #include "semantic.h"
 #include "symtab.h"
 #include "tac.h"
 #include "codegen.h"
+#include "bloques.h"
 
 extern FILE *yyin;
 extern char *yytext;
@@ -28,117 +30,6 @@ void yyrestart(FILE *input_file);
 void nova_lexer_reset(void);
 void nova_parser_reset(void);
 
-#define MAX_MODULES 128
-#define MAX_RUTAS 16
-#define NVO_HEADER_SIZE 16
-
-typedef struct {
-    char *path;
-    char *key;
-    Nodo *ast;
-    int state;
-} Module;
-
-static Module modules[MAX_MODULES];
-static int module_count;
-static const char *module_paths[MAX_RUTAS];
-static int module_path_count;
-
-static char *copy_string(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *r = malloc(n);
-    if (r == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    memcpy(r, s, n);
-    return r;
-}
-
-static uint32_t checksum_bytes(const unsigned char *p, size_t n) {
-    uint32_t sum = 0;
-    for (size_t i = 0; i < n; i++) sum = sum * 31u + p[i];
-    return sum;
-}
-
-static uint32_t get_u32(const unsigned char *p) {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
-           (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-static void put_u32(unsigned char *p, uint32_t v) {
-    p[0] = (unsigned char)v;
-    p[1] = (unsigned char)(v >> 8);
-    p[2] = (unsigned char)(v >> 16);
-    p[3] = (unsigned char)(v >> 24);
-}
-
-static int has_suffix(const char *s, const char *suffix) {
-    size_t a = strlen(s), b = strlen(suffix);
-    return a >= b && strcmp(s + a - b, suffix) == 0;
-}
-
-static char *read_file_bytes(const char *path, size_t *length) {
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
-    long n = ftell(f);
-    if (n < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
-    char *buf = malloc((size_t)n + 1);
-    if (buf == NULL) { fclose(f); fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    size_t got = fread(buf, 1, (size_t)n, f);
-    int failed = ferror(f);
-    fclose(f);
-    if (failed || got != (size_t)n) { free(buf); return NULL; }
-    buf[got] = '\0';
-    *length = got;
-    return buf;
-}
-
-/* Los objetos .nvo conservan la fuente validada para que el enlace final
- * vuelva a ejecutar semantica, asignacion y relajacion con el conjunto entero. */
-static char *source_from_file(const char *path, size_t *length) {
-    char *raw = read_file_bytes(path, length);
-    if (raw == NULL) return NULL;
-    if (!has_suffix(path, ".nvo")) return raw;
-    if (*length < NVO_HEADER_SIZE || memcmp(raw, "NVO1", 4) != 0 ||
-        raw[4] != 1 || raw[5] != 0 || raw[6] != 0 || raw[7] != 0 ||
-        get_u32((unsigned char *)raw + 8) != *length - NVO_HEADER_SIZE ||
-        get_u32((unsigned char *)raw + 12) !=
-            checksum_bytes((unsigned char *)raw + NVO_HEADER_SIZE, *length - NVO_HEADER_SIZE)) {
-        free(raw);
-        errno = EINVAL;
-        return NULL;
-    }
-    size_t source_length = *length - NVO_HEADER_SIZE;
-    memmove(raw, raw + NVO_HEADER_SIZE, source_length);
-    raw[source_length] = '\0';
-    *length = source_length;
-    return raw;
-}
-
-static int parse_source(const char *path, Nodo **out_ast) {
-    size_t length = 0;
-    char *source = source_from_file(path, &length);
-    if (source == NULL) {
-        fprintf(stderr, "novac: no se pudo leer una fuente/objeto valido '%s'\n", path);
-        return 3;
-    }
-    FILE *stream = fmemopen(source, length, "r");
-    if (stream == NULL) { free(source); return 3; }
-    yyin = stream;
-    yyrestart(stream);
-    nova_lexer_reset();
-    nova_parser_reset();
-    diag_archivo(path);
-    int rc = yyparse();
-    fclose(stream);
-    free(source);
-    if (rc != 0 || diag_errores() != 0) {
-        liberar_ast(raiz_ast);
-        raiz_ast = NULL;
-        return 1;
-    }
-    *out_ast = raiz_ast;
-    return 0;
-}
 
 static int write_object(const char *source_path, const char *output_path) {
     size_t length = 0;
@@ -163,409 +54,6 @@ static int write_object(const char *source_path, const char *output_path) {
     return 0;
 }
 
-static char *canonical_path(const char *path) {
-    char resolved[PATH_MAX];
-    if (realpath(path, resolved) != NULL) return copy_string(resolved);
-    return copy_string(path);
-}
-
-static int path_is_file(const char *path) {
-    return access(path, R_OK) == 0;
-}
-
-static char *path_candidate(const char *dir, const char *name) {
-    char buf[PATH_MAX];
-    int n = snprintf(buf, sizeof(buf), "%s/%s", dir, name);
-    if (n < 0 || (size_t)n >= sizeof(buf)) return NULL;
-    return path_is_file(buf) ? canonical_path(buf) : NULL;
-}
-
-static char *resolve_import(const char *request, const char *importer_path) {
-    char name[PATH_MAX];
-    if (strlen(request) >= sizeof(name)) return NULL;
-    snprintf(name, sizeof(name), "%s", request);
-    int has_ext = has_suffix(name, ".nv") || has_suffix(name, ".nvo");
-    char with_ext[PATH_MAX];
-    if (has_ext) snprintf(with_ext, sizeof(with_ext), "%s", name);
-    else {
-        size_t name_length = strlen(name);
-        if (name_length + 4 > sizeof(with_ext)) return NULL;
-        memcpy(with_ext, name, name_length);
-        memcpy(with_ext + name_length, ".nv", 4);
-    }
-
-    if (with_ext[0] == '/' && path_is_file(with_ext)) return canonical_path(with_ext);
-    char dir[PATH_MAX];
-    snprintf(dir, sizeof(dir), "%s", importer_path);
-    char *slash = strrchr(dir, '/');
-    if (slash != NULL) *slash = '\0'; else snprintf(dir, sizeof(dir), ".");
-    char *found = path_candidate(dir, with_ext);
-    if (found == NULL && has_suffix(with_ext, ".nv")) {
-        with_ext[strlen(with_ext) - 3] = '\0';
-        strncat(with_ext, ".nvo", sizeof(with_ext) - strlen(with_ext) - 1);
-        found = path_candidate(dir, with_ext);
-    }
-    if (found != NULL) return found;
-    for (int i = 0; i < module_path_count; i++) {
-        found = path_candidate(module_paths[i], with_ext);
-        if (found != NULL) return found;
-    }
-    return NULL;
-}
-
-static Nodo *child_of(Nodo *n, TipoNodo kind) {
-    for (Nodo *c = n ? n->hijo : NULL; c != NULL; c = c->sig)
-        if (c->tipo == kind) return c;
-    return NULL;
-}
-
-static void module_key_for(const char *path, char *out, size_t cap) {
-    const char *base = strrchr(path, '/');
-    base = base ? base + 1 : path;
-    size_t n = strlen(base);
-    if (n > 3 && strcmp(base + n - 3, ".nv") == 0) n -= 3;
-    else if (n > 4 && strcmp(base + n - 4, ".nvo") == 0) n -= 4;
-    uint32_t hash = 2166136261u;
-    for (const unsigned char *p = (const unsigned char *)path; *p; p++)
-        hash = (hash ^ *p) * 16777619u;
-    size_t used = (size_t)snprintf(out, cap, "m_");
-    for (size_t i = 0; i < n && used + 10 < cap; i++) {
-        char ch = base[i];
-        out[used++] = ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                       (ch >= '0' && ch <= '9') || ch == '_') ? ch : '_';
-    }
-    snprintf(out + used, cap - used, "_%08x", hash);
-}
-
-static int find_module_path(const char *path) {
-    for (int i = 0; i < module_count; i++)
-        if (strcmp(modules[i].path, path) == 0) return i;
-    return -1;
-}
-
-static int load_module(const char *path);
-
-static int load_imports_for_module(int index) {
-    Module *m = &modules[index];
-    Nodo *imports = child_of(m->ast, NODO_IMPORTS);
-    for (Nodo *imp = imports ? imports->hijo : NULL; imp != NULL; imp = imp->sig) {
-        if (imp->tipo != NODO_IMPORT) continue;
-        if (child_of(imp, NODO_ALIAS) == NULL) {
-            const char *base = strrchr(imp->texto ? imp->texto : "", '/');
-            base = base ? base + 1 : (imp->texto ? imp->texto : "");
-            size_t n = strlen(base);
-            if (n > 3 && strcmp(base + n - 3, ".nv") == 0) n -= 3;
-            else if (n > 4 && strcmp(base + n - 4, ".nvo") == 0) n -= 4;
-            int valid = n > 0 && ((base[0] >= 'a' && base[0] <= 'z') ||
-                       (base[0] >= 'A' && base[0] <= 'Z') || base[0] == '_');
-            for (size_t j = 1; valid && j < n; j++)
-                valid = (base[j] >= 'a' && base[j] <= 'z') ||
-                        (base[j] >= 'A' && base[j] <= 'Z') ||
-                        (base[j] >= '0' && base[j] <= '9') || base[j] == '_';
-            if (!valid) {
-                diag_archivo(m->path);
-                diag_error("E409", imp->linea, imp->columna, 1,
-                           "'%s' no da un nombre de modulo valido: usa 'ut <alias>'",
-                           imp->texto ? imp->texto : "");
-                continue;
-            }
-        }
-        char *target = resolve_import(imp->texto ? imp->texto : "", m->path);
-        if (target == NULL) {
-            diag_archivo(m->path);
-            diag_error("E404", imp->linea, imp->columna, 1,
-                       "no se encontro el modulo importado '%s'", imp->texto ? imp->texto : "");
-            continue;
-        }
-        int target_index = load_module(target);
-        free(target);
-        if (target_index < 0) return 0;
-    }
-    return diag_errores() == 0;
-}
-
-static int load_module(const char *input_path) {
-    char *path = canonical_path(input_path);
-    int existing = find_module_path(path);
-    if (existing >= 0) { free(path); return existing; }
-    if (module_count >= MAX_MODULES) {
-        diag_error("E404", 0, 1, 1, "se excedio el maximo de %d modulos", MAX_MODULES);
-        free(path);
-        return -1;
-    }
-    int index = module_count++;
-    Module *m = &modules[index];
-    m->path = path;
-    m->key = malloc(128);
-    if (m->key == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    module_key_for(path, m->key, 128);
-    m->ast = NULL;
-    m->state = 1;
-
-    int rc = parse_source(path, &m->ast);
-    if (rc != 0) return -1;
-    if (!load_imports_for_module(index)) return -1;
-    m->state = 2;
-    return index;
-}
-
-static int find_import_target(Module *owner, Nodo *imp) {
-    char *path = resolve_import(imp->texto ? imp->texto : "", owner->path);
-    if (path == NULL) return -1;
-    int index = find_module_path(path);
-    free(path);
-    return index;
-}
-
-static int alias_matches(Module *owner, Nodo *imp, const char *alias) {
-    Nodo *a = child_of(imp, NODO_ALIAS);
-    if (a != NULL) return a->texto != NULL && strcmp(a->texto, alias) == 0;
-    const char *base = strrchr(imp->texto ? imp->texto : "", '/');
-    base = base ? base + 1 : (imp->texto ? imp->texto : "");
-    size_t n = strlen(base);
-    if (n > 3 && strcmp(base + n - 3, ".nv") == 0) n -= 3;
-    else if (n > 4 && strcmp(base + n - 4, ".nvo") == 0) n -= 4;
-    (void)owner;
-    return strlen(alias) == n && strncmp(base, alias, n) == 0;
-}
-
-static int find_import_by_alias(Module *owner, const char *alias) {
-    Nodo *imports = child_of(owner->ast, NODO_IMPORTS);
-    for (Nodo *imp = imports ? imports->hijo : NULL; imp != NULL; imp = imp->sig) {
-        if (imp->tipo == NODO_IMPORT && alias_matches(owner, imp, alias))
-            return find_import_target(owner, imp);
-    }
-    return -1;
-}
-
-static int module_has_global(Module *m, const char *name, TipoNodo kind,
-                             int *is_private) {
-    Nodo *globals = child_of(m->ast, NODO_GLOBALES);
-    for (Nodo *g = globals ? globals->hijo : NULL; g != NULL; g = g->sig) {
-        if (g->tipo != kind || g->texto == NULL || strcmp(g->texto, name) != 0) continue;
-        *is_private = child_of(g, NODO_PRIVATUM) != NULL;
-        return 1;
-    }
-    return 0;
-}
-
-static char *qualified_name(const char *key, const char *name) {
-    size_t n = strlen(key) + strlen(name) + 2;
-    char *r = malloc(n);
-    if (r == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    snprintf(r, n, "%s$%s", key, name);
-    return r;
-}
-
-typedef struct LocalName {
-    const char *name;
-    struct LocalName *next;
-} LocalName;
-
-typedef struct {
-    Module *owner;
-    LocalName *scopes[128];
-    int depth;
-    int failed;
-} RewriteContext;
-
-static int local_visible(RewriteContext *ctx, const char *name) {
-    for (int i = ctx->depth - 1; i >= 0; i--)
-        for (LocalName *l = ctx->scopes[i]; l != NULL; l = l->next)
-            if (strcmp(l->name, name) == 0) return 1;
-    return 0;
-}
-
-static void scope_push(RewriteContext *ctx) {
-    if (ctx->depth < 128) ctx->scopes[ctx->depth++] = NULL;
-    else ctx->failed = 1;
-}
-
-static void scope_add(RewriteContext *ctx, const char *name) {
-    if (ctx->depth == 0 || name == NULL) return;
-    LocalName *l = malloc(sizeof(*l));
-    if (l == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    l->name = name;
-    l->next = ctx->scopes[ctx->depth - 1];
-    ctx->scopes[ctx->depth - 1] = l;
-}
-
-static void scope_pop(RewriteContext *ctx) {
-    if (ctx->depth == 0) return;
-    LocalName *l = ctx->scopes[--ctx->depth];
-    while (l != NULL) { LocalName *next = l->next; free(l); l = next; }
-}
-
-static int is_intrinsic_name(const char *name) {
-    static const char *const names[] = {
-        "longitudo", "ingredere", "exi", "custodi", "feistel", "desfeistel",
-        "scribe", "dic", NULL
-    };
-    for (int i = 0; names[i] != NULL; i++) if (strcmp(names[i], name) == 0) return 1;
-    return 0;
-}
-
-static void rewrite_nodes(Nodo *n, RewriteContext *ctx);
-
-static void rewrite_qualified(Nodo *n, RewriteContext *ctx, TipoNodo kind) {
-    int target = find_import_by_alias(ctx->owner, n->modulo);
-    int is_private = 0;
-    if (target < 0 || !module_has_global(&modules[target], n->texto, kind, &is_private)) {
-        diag_archivo(ctx->owner->path);
-        diag_error("E401", n->linea, n->columna, 1,
-                   "el simbolo '%s.%s' no existe en un modulo importado",
-                   n->modulo ? n->modulo : "", n->texto ? n->texto : "");
-        ctx->failed = 1;
-        return;
-    }
-    if (is_private && target != (int)(ctx->owner - modules)) {
-        diag_archivo(ctx->owner->path);
-        diag_error("E403", n->linea, n->columna, 1,
-                   "el simbolo '%s.%s' es privatum", n->modulo, n->texto);
-        ctx->failed = 1;
-        return;
-    }
-    char *full = qualified_name(modules[target].key, n->texto);
-    free(n->texto);
-    n->texto = full;
-    free(n->modulo);
-    n->modulo = NULL;
-}
-
-static void rewrite_function(Module *owner, Nodo *function) {
-    RewriteContext ctx = {.owner = owner, .depth = 0, .failed = 0};
-    scope_push(&ctx);
-    Nodo *params = child_of(function, NODO_PARAMETROS);
-    for (Nodo *p = params ? params->hijo : NULL; p != NULL; p = p->sig)
-        if (p->tipo == NODO_PARAMETRO) scope_add(&ctx, p->texto);
-    Nodo *body = child_of(function, NODO_BLOQUE);
-    rewrite_nodes(body, &ctx);
-    while (ctx.depth > 0) scope_pop(&ctx);
-}
-
-static void rewrite_nodes(Nodo *n, RewriteContext *ctx) {
-    for (; n != NULL; n = n->sig) {
-        if (n->tipo == NODO_BLOQUE) {
-            scope_push(ctx);
-            rewrite_nodes(n->hijo, ctx);
-            scope_pop(ctx);
-            continue;
-        }
-        if (n->tipo == NODO_VARIABLE) {
-            rewrite_nodes(n->hijo, ctx);
-            scope_add(ctx, n->texto);
-            continue;
-        }
-        if (n->tipo == NODO_LLAMADA) {
-            if (n->modulo != NULL) {
-                rewrite_qualified(n, ctx, NODO_FUNCION);
-            } else if (ctx->owner != NULL && ctx->owner->key != NULL &&
-                       !is_intrinsic_name(n->texto)) {
-                int priv = 0;
-                if (module_has_global(ctx->owner, n->texto, NODO_FUNCION, &priv)) {
-                    char *full = qualified_name(ctx->owner->key, n->texto);
-                    free(n->texto);
-                    n->texto = full;
-                }
-            }
-            rewrite_nodes(n->hijo, ctx);
-            continue;
-        }
-        if (n->tipo == NODO_IDENT) {
-            if (n->modulo != NULL) {
-                rewrite_qualified(n, ctx, NODO_CONSTANTE);
-            } else if (ctx->owner != NULL && ctx->owner->key != NULL &&
-                       !local_visible(ctx, n->texto)) {
-                int priv = 0;
-                if (module_has_global(ctx->owner, n->texto, NODO_CONSTANTE, &priv)) {
-                    char *full = qualified_name(ctx->owner->key, n->texto);
-                    free(n->texto);
-                    n->texto = full;
-                }
-            }
-        }
-        rewrite_nodes(n->hijo, ctx);
-    }
-}
-
-static void rewrite_module(Module *m, int root_module) {
-    Nodo *globals = child_of(m->ast, NODO_GLOBALES);
-    for (Nodo *g = globals ? globals->hijo : NULL; g != NULL; g = g->sig) {
-        if (root_module) {
-            if (g->tipo == NODO_FUNCION) rewrite_function(m, g);
-            else if (g->tipo == NODO_CONSTANTE) {
-                RewriteContext ctx = {.owner = m, .depth = 0, .failed = 0};
-                rewrite_nodes(g->hijo, &ctx);
-            }
-            continue;
-        }
-        if (g->tipo == NODO_FUNCION) {
-            rewrite_function(m, g);
-        } else if (g->tipo == NODO_CONSTANTE) {
-            RewriteContext ctx = {.owner = m, .depth = 0, .failed = 0};
-            rewrite_nodes(g->hijo, &ctx);
-        }
-    }
-}
-
-static int link_modules(Nodo *root, const char *root_path,
-                        char **extra_paths, int extra_count) {
-    module_count = 1;
-    modules[0].path = canonical_path(root_path);
-    modules[0].key = NULL;
-    modules[0].ast = root;
-    modules[0].state = 2;
-
-    for (int i = 0; i < extra_count; i++) {
-        if (load_module(extra_paths[i]) < 0) {
-            raiz_ast = root;
-            return 0;
-        }
-    }
-    if (!load_imports_for_module(0)) {
-        raiz_ast = root;
-        return 0;
-    }
-
-    /* Reescribe referencias cuando todas las declaraciones aun conservan su
-     * nombre de origen, luego aplica el prefijo unico por modulo. */
-    rewrite_module(&modules[0], 1);
-    for (int i = 1; i < module_count; i++) rewrite_module(&modules[i], 0);
-    for (int i = 1; i < module_count; i++) {
-        Nodo *globals = child_of(modules[i].ast, NODO_GLOBALES);
-        for (Nodo *g = globals ? globals->hijo : NULL; g != NULL; g = g->sig) {
-            if (g->tipo != NODO_FUNCION && g->tipo != NODO_CONSTANTE) continue;
-            char *full = qualified_name(modules[i].key, g->texto);
-            free(g->texto);
-            g->texto = full;
-        }
-    }
-
-    Nodo *root_globals = child_of(root, NODO_GLOBALES);
-    for (int i = 1; i < module_count; i++) {
-        Nodo *globals = child_of(modules[i].ast, NODO_GLOBALES);
-        if (globals == NULL || globals->hijo == NULL) continue;
-        Nodo *items = globals->hijo;
-        globals->hijo = NULL;
-        root_globals->hijo = cadena_agregar(root_globals->hijo, items);
-    }
-    raiz_ast = root;
-    return diag_errores() == 0;
-}
-
-static void release_modules(void) {
-    for (int i = 1; i < module_count; i++) {
-        liberar_ast(modules[i].ast);
-        free(modules[i].path);
-        free(modules[i].key);
-        modules[i] = (Module){0};
-    }
-    if (module_count > 0) {
-        free(modules[0].path);
-        modules[0] = (Module){0};
-    }
-    module_count = 0;
-}
 
 /* Estado global de la ejecucion actual. */
 static int modo_verbose = 0;
@@ -573,6 +61,7 @@ static int modo_arbol = 0;
 static int modo_lexer = 0;
 static int modo_symtab = 0;
 static int modo_ir = 0;
+static int modo_bloques = 0;
 static int modo_asm = 0;
 static int modo_ensamblar = 0;
 static int modo_paquetes = 0;
@@ -580,8 +69,6 @@ static int modo_objeto = 0;        /* -c: solo compilar, generar .nvo */
 static const char *archivo_salida = NULL;
 
 /* -I: directorios donde buscar modulos importados. */
-static const char *rutas_modulos[MAX_RUTAS];
-static int n_rutas = 0;
 
 /* Mapea cada token a su nombre para la salida del modo de inspeccion. */
 static const char *nombre_token(int tipo) {
@@ -814,6 +301,7 @@ static void print_usage(const char *prog) {
         "  -t                Imprime el arbol sintactico (AST)\n"
         "  --sym, -m         Imprime la tabla de simbolos (Fase 3)\n"
         "  --ir              Codigo de tres direcciones (Fase 4)\n"
+        "  --bloques         Bloques basicos y grafo de flujo de control\n"
         "  -s                Genera binario y ensamblador .asm; tambien lo muestra\n"
         "  -x                Ensambla un archivo .s a imagen binaria .hex\n"
         "  -p                Muestra paquetes con slots y codificacion hexadecimal\n"
@@ -833,6 +321,7 @@ static const struct option opciones_largas[] = {
     {"tokens",  no_argument, NULL, 'l'},
     {"sym",     no_argument, NULL, 'm'},
     {"ir",      no_argument, NULL, 1001},
+    {"bloques", no_argument, NULL, 1004},
     {"version", no_argument, NULL, 1002},
     {"max-errors", required_argument, NULL, 1003},
     {"help",    no_argument, NULL, 'h'},
@@ -863,6 +352,7 @@ int main(int argc, char **argv) {
             }
             case 1002: printf("novac (Nova) 0.5 - fases 1 a 6: lexico, sintactico, semantico,\n       ensamblador, calculo de saltos y binario CERBERO\n"); return 0;
             case 1001: modo_ir = 1; break;
+            case 1004: modo_bloques = 1; break;
             case 'o': archivo_salida = optarg; break;
             case 'v': modo_verbose = 1; break;
             case 't': modo_arbol = 1; break;
@@ -874,12 +364,10 @@ int main(int argc, char **argv) {
             case 'c': modo_objeto = 1; break;
             case 'w': diag_warn_ninguna(); break;
             case 'I':
-                if (n_rutas >= MAX_RUTAS) {
-                    fprintf(stderr, "novac: demasiados directorios -I (maximo %d)\n", MAX_RUTAS);
+                if (!nova_agregar_ruta_modulos(optarg)) {
+                    fprintf(stderr, "novac: demasiados directorios -I (maximo %d)\n", NOVA_MAX_RUTAS);
                     return 2;
                 }
-                rutas_modulos[n_rutas++] = optarg;
-                module_paths[module_path_count++] = optarg;
                 break;
             case 'W':
                 /* -Wall, -Werror, -Wno-W00n. getopt entrega lo que sigue a -W. */
@@ -908,7 +396,7 @@ int main(int argc, char **argv) {
     int extra_count = argc - optind - 1;
     if (modo_ensamblar) {
         if (extra_count > 0 || modo_objeto || modo_lexer || modo_arbol ||
-            modo_symtab || modo_ir || modo_asm || modo_paquetes) {
+            modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes) {
             fprintf(stderr, "novac: -x recibe un solo .s y no se combina con opciones de inspeccion o -c\n");
             return 2;
         }
@@ -931,7 +419,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "novac: -c recibe un solo modulo fuente por invocacion\n");
         return 2;
     }
-    if ((modo_lexer || modo_arbol || modo_symtab || modo_ir || modo_asm || modo_paquetes) && extra_count > 0) {
+    if ((modo_lexer || modo_arbol || modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes) && extra_count > 0) {
         fprintf(stderr, "novac: las opciones de inspeccion reciben un solo archivo\n");
         return 2;
     }
@@ -1007,8 +495,8 @@ int main(int argc, char **argv) {
      */
     if (modo_verbose) fprintf(stderr, "== Fase 3: Analisis Semantico -- %s ==\n", archivo_fuente);
 
-    if (!modo_arbol && (modo_objeto || modo_symtab || modo_ir || modo_asm || modo_paquetes ||
-                        (!modo_arbol && !modo_symtab && !modo_ir && !modo_asm && !modo_paquetes))) {
+    if (!modo_arbol && (modo_objeto || modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes ||
+                        (!modo_arbol && !modo_symtab && !modo_ir && !modo_bloques && !modo_asm && !modo_paquetes))) {
         if (!link_modules(raiz_ast, archivo_fuente, extra_paths, extra_count)) {
             liberar_ast(raiz_ast);
             release_modules();
@@ -1058,6 +546,36 @@ int main(int argc, char **argv) {
             }
         }
         symtab_dump(salida, tabla);
+
+        /*
+         * Los puntos de salto, debajo de la tabla de simbolos.
+         *
+         * La Fase 3 de la guia pide registrar las etiquetas de condicionales y
+         * ciclos con su direccion en memoria. El calculo lo hace la resolucion
+         * de saltos de la fase 5, y su resultado ya salia como comentario
+         * dentro del .asm; aqui se muestra tambien junto a los simbolos, que es
+         * donde se la busca al revisar el compilador.
+         */
+        {
+            const CodegenEtiqueta *etqs = NULL;
+            int n = codegen_etiquetas(&etqs);
+            fprintf(salida, "\n=== Puntos de salto y etiquetas resueltas ===\n");
+            fprintf(salida, "%-30s %-12s %-6s %s\n",
+                    "ETIQUETA", "DIRECCION", "BUNDLE", "UBICACION");
+            fprintf(salida, "--------------------------------------------"
+                            "----------------------------\n");
+            for (int k = 0; k < n; k++) {
+                if (etqs[k].es_dato)
+                    fprintf(salida, "%-30s 0x%04X       %-6s %s\n",
+                            etqs[k].nombre, etqs[k].direccion, "-",
+                            "DMEM (dato)");
+                else
+                    fprintf(salida, "%-30s 0x%04X       %-6d %s\n",
+                            etqs[k].nombre, etqs[k].direccion, etqs[k].bundle,
+                            "IMEM (codigo)");
+            }
+            fprintf(salida, "%d etiqueta%s en total.\n", n, n == 1 ? "" : "s");
+        }
         if (archivo_salida != NULL && salida != stdout) fclose(salida);
     }
 
@@ -1089,9 +607,9 @@ int main(int argc, char **argv) {
      * binario, como dice el documento. --ir y -s son volcados de texto que
      * reemplazan al binario para poder revisar la fase por partes.
      */
-    int modo_binario = (!modo_ir && !modo_arbol && !modo_symtab && !modo_paquetes);
+    int modo_binario = (!modo_ir && !modo_bloques && !modo_arbol && !modo_symtab && !modo_paquetes);
 
-    if (modo_ir || modo_asm || modo_paquetes || modo_binario) {
+    if (modo_ir || modo_bloques || modo_asm || modo_paquetes || modo_binario) {
         if (modo_verbose) fprintf(stderr, "== Fase 4: Generacion de codigo -- %s ==\n", archivo_fuente);
 
         TACList *tac = tac_generate_from_ast(raiz_ast, tabla);
@@ -1111,6 +629,31 @@ int main(int argc, char **argv) {
                 }
             }
             tac_print(salida, tac);
+            if (salida != stdout) fclose(salida);
+        }
+        if (modo_bloques) {
+            /*
+             * Bloques basicos y grafo de flujo. Se construye sobre la misma
+             * lista de tres direcciones que alimenta a la fase 4, no sobre una
+             * copia: lo que se dibuja aqui es exactamente el codigo que se va
+             * a traducir.
+             */
+            FILE *salida = stdout;
+            GrafoFlujo *g;
+            if (archivo_salida != NULL) {
+                salida = fopen(archivo_salida, modo_ir ? "a" : "w");
+                if (salida == NULL) {
+                    fprintf(stderr, "novac: no se pudo escribir '%s'\n", archivo_salida);
+                    tac_free(tac);
+                    symtab_destroy(tabla);
+                    liberar_ast(raiz_ast);
+                    release_modules();
+                    return 3;
+                }
+            }
+            g = cfg_construir(tac);
+            cfg_imprimir(salida, g);
+            cfg_liberar(g);
             if (salida != stdout) fclose(salida);
         }
         if (modo_asm) {

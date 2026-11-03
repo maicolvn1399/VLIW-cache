@@ -97,6 +97,12 @@ module tb_programa;
   logic [`XLEN-1:0]             psw;
   logic [`NREGS-1:0][`XLEN-1:0] registros;
 
+  // Contadores de hardware (perf_counters.sv)
+  logic [31:0]              hw_ciclos, hw_bundles, hw_instrucciones;
+  logic [`NSLOTS-1:0][31:0] hw_ops_slot;
+  logic [31:0]              hw_vacios, hw_saltos, hw_delay, hw_stall;
+  logic                     hw_desbordado;
+
   top #(
       .NUM_BUNDLES (CANTIDAD_BUNDLES),
       .NUM_WORDS   (CANTIDAD_PALABRAS),
@@ -106,7 +112,17 @@ module tb_programa;
       .rst_n    (rst_n),
       .halted   (detenido),
       .psw      (psw),
-      .dbg_regs (registros)
+      .dbg_regs (registros),
+
+      .perf_ciclos         (hw_ciclos),
+      .perf_bundles        (hw_bundles),
+      .perf_instrucciones  (hw_instrucciones),
+      .perf_ops_slot       (hw_ops_slot),
+      .perf_bundles_vacios (hw_vacios),
+      .perf_saltos         (hw_saltos),
+      .perf_delay_vacios   (hw_delay),
+      .perf_stall          (hw_stall),
+      .perf_desbordado     (hw_desbordado)
   );
 
   // ---------------------------------------------------------------------------
@@ -136,9 +152,65 @@ module tb_programa;
   integer bundles_ejecutados = 0;
 
   always @(posedge clk) begin
-    if (rst_n) begin
+    if (rst_n && !detenido) begin
       ciclo = ciclo + 1;
-      if (dut.ex_valid) bundles_ejecutados = bundles_ejecutados + 1;
+    end
+    if (rst_n && dut.ex_valid) bundles_ejecutados = bundles_ejecutados + 1;
+  end
+
+  // ---------------------------------------------------------------------------
+  // La cuenta propia del testbench, para contrastar los contadores
+  //
+  // El procesador trae sus propios contadores de rendimiento, y un contador
+  // equivocado no rompe nada: el programa corre igual y el error sale como un
+  // numero creible en el informe. Por eso el testbench cuenta en paralelo y
+  // compara al final.
+  //
+  // El contraste vale por lo que es. Los bundles se cuentan en EX mirando
+  // ex_valid, que es una etapa distinta de la que mira el hardware, asi que esa
+  // comparacion es independiente de verdad. Las instrucciones se decodifican
+  // del mismo id_bundle que ve perf_counters: lo que se comprueba ahi es el
+  // decodificador de NOP y la acumulacion, escritos aparte, no la senal de
+  // origen. Si los dos leyeran mal el mismo cable, ninguno de los dos lo
+  // notaria, y eso lo cubre tb_perf_counters.sv con bundles armados a mano.
+  // ---------------------------------------------------------------------------
+
+  integer tb_instrucciones = 0;
+  integer tb_ops_slot [0:`NSLOTS-1];
+
+  function automatic integer ranuras_ocupadas(input logic [`BUNDLE_W-1:0] b);
+    logic [31:0] q0, q1, q2;
+    logic [15:0] q3, q4;
+    begin
+      q0 = b[`SLOT_S0];  q1 = b[`SLOT_S1];  q2 = b[`SLOT_S2];
+      q3 = b[`SLOT_S3];  q4 = b[`SLOT_S4];
+      ranuras_ocupadas = 0;
+      if (q0[`F_OPC]  != `ALU_NOP) ranuras_ocupadas = ranuras_ocupadas + 1;
+      if (q1[`F_OPC]  != `ALU_NOP) ranuras_ocupadas = ranuras_ocupadas + 1;
+      if (q2[`F_OPC]  != `LSU_NOP) ranuras_ocupadas = ranuras_ocupadas + 1;
+      if (q3[`S3_OPC] != `CRP_NOP) ranuras_ocupadas = ranuras_ocupadas + 1;
+      if (q4[`S4_OPC] != `BRU_NOP) ranuras_ocupadas = ranuras_ocupadas + 1;
+    end
+  endfunction
+
+  integer s;
+
+  initial
+    for (s = 0; s < `NSLOTS; s = s + 1) tb_ops_slot[s] = 0;
+
+  always @(posedge clk) begin
+    logic [31:0] w0, w1, w2;
+    logic [15:0] w3, w4;
+    if (rst_n && dut.id_valid) begin
+      tb_instrucciones = tb_instrucciones + ranuras_ocupadas(dut.id_bundle);
+      w0 = dut.id_bundle[`SLOT_S0];  w1 = dut.id_bundle[`SLOT_S1];
+      w2 = dut.id_bundle[`SLOT_S2];  w3 = dut.id_bundle[`SLOT_S3];
+      w4 = dut.id_bundle[`SLOT_S4];
+      if (w0[`F_OPC]  != `ALU_NOP) tb_ops_slot[0] = tb_ops_slot[0] + 1;
+      if (w1[`F_OPC]  != `ALU_NOP) tb_ops_slot[1] = tb_ops_slot[1] + 1;
+      if (w2[`F_OPC]  != `LSU_NOP) tb_ops_slot[2] = tb_ops_slot[2] + 1;
+      if (w3[`S3_OPC] != `CRP_NOP) tb_ops_slot[3] = tb_ops_slot[3] + 1;
+      if (w4[`S4_OPC] != `BRU_NOP) tb_ops_slot[4] = tb_ops_slot[4] + 1;
     end
   end
 
@@ -498,6 +570,89 @@ module tb_programa;
   end
 
   // ---------------------------------------------------------------------------
+  // El informe de rendimiento
+  //
+  // Sale de los contadores del procesador, no de lo que conto el testbench: los
+  // numeros que se reportan tienen que ser los que el hardware va a producir
+  // cuando no haya un simulador mirando. Lo que conto el testbench se usa solo
+  // para contrastarlos.
+  //
+  // Las tres razones derivadas (IPC, bundles por ciclo y ocupacion) no son
+  // contadores: se calculan aqui a partir de los que si lo son. Ponerlas en
+  // hardware costaria un divisor para algo que se resuelve con una resta en el
+  // informe.
+  // ---------------------------------------------------------------------------
+
+  integer metricas_malas = 0;
+
+  task automatic comparar(input integer salida,
+                          input string  nombre,
+                          input integer del_hardware,
+                          input integer del_testbench);
+    begin
+      if (del_hardware !== del_testbench) begin
+        metricas_malas = metricas_malas + 1;
+        $fdisplay(salida, "    FALLA  %-22s hardware %0d, testbench %0d",
+                  nombre, del_hardware, del_testbench);
+      end else begin
+        $fdisplay(salida, "    ok     %-22s %0d", nombre, del_hardware);
+      end
+    end
+  endtask
+
+  task automatic imprimir_metricas(input integer salida);
+    real ipc, bpc, ocupacion;
+    integer k, total_ciclos;
+    begin
+      total_ciclos = (hw_ciclos == 0) ? 1 : hw_ciclos;
+
+      ipc       = hw_instrucciones * 1.0 / total_ciclos;
+      bpc       = hw_bundles       * 1.0 / total_ciclos;
+      ocupacion = (hw_bundles == 0) ? 0.0 :
+                  hw_instrucciones * 1.0 / hw_bundles;
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  metricas de rendimiento (contadores de hardware)");
+      $fdisplay(salida, "    ciclos de ejecucion          %10d", hw_ciclos);
+      $fdisplay(salida, "    bundles ejecutados           %10d", hw_bundles);
+      $fdisplay(salida, "    instrucciones ejecutadas     %10d", hw_instrucciones);
+      $fdisplay(salida, "    IPC  (instrucciones/ciclo)   %10.3f", ipc);
+      $fdisplay(salida, "    bundles por ciclo            %10.3f", bpc);
+      $fdisplay(salida, "    ocupacion del bundle         %10.2f  de %0d ranuras",
+                ocupacion, `NSLOTS);
+      $fdisplay(salida, "    bundles vacios (puros NOP)   %10d", hw_vacios);
+      $fdisplay(salida, "    saltos tomados               %10d", hw_saltos);
+      $fdisplay(salida, "    delay slots desperdiciados   %10d", hw_delay);
+      $fdisplay(salida, "    ciclos perdidos por stalls   %10d", hw_stall);
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "    ocupacion por ranura");
+      $fdisplay(salida, "      S0 ALU-0   %8d", hw_ops_slot[0]);
+      $fdisplay(salida, "      S1 ALU-1   %8d", hw_ops_slot[1]);
+      $fdisplay(salida, "      S2 LSU     %8d", hw_ops_slot[2]);
+      $fdisplay(salida, "      S3 cripto  %8d", hw_ops_slot[3]);
+      $fdisplay(salida, "      S4 BRU     %8d", hw_ops_slot[4]);
+
+      // ---- los contadores contra lo que observo el testbench ---------------
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  los contadores contra la cuenta del testbench");
+      comparar(salida, "ciclos",        hw_ciclos,        ciclo);
+      comparar(salida, "bundles",       hw_bundles,       bundles_ejecutados);
+      comparar(salida, "instrucciones", hw_instrucciones, tb_instrucciones);
+      for (k = 0; k < `NSLOTS; k = k + 1)
+        comparar(salida, $sformatf("ranura S%0d", k), hw_ops_slot[k],
+                 tb_ops_slot[k]);
+
+      if (hw_desbordado) begin
+        metricas_malas = metricas_malas + 1;
+        $fdisplay(salida, "");
+        $fdisplay(salida, "    FALLA  algun contador se desbordo: las cifras de");
+        $fdisplay(salida, "           arriba estan saturadas y no sirven");
+      end
+    end
+  endtask
+
+  // ---------------------------------------------------------------------------
   // Secuencia
   // ---------------------------------------------------------------------------
 
@@ -630,6 +785,8 @@ module tb_programa;
     else
       $fdisplay(salida, "  el programa NO llego a HALT en %0d ciclos", tope_ciclos);
 
+    imprimir_metricas(salida);
+
     // ------------------------------------------------------------------------
     $fdisplay(salida, "");
     $fdisplay(salida, "  registros");
@@ -715,6 +872,13 @@ module tb_programa;
     if (!detenido) begin
       $display("RESULTADO: FALLA (no termino; probar con CICLOS= mas alto)");
       $fatal(1, "el programa no llego a HALT");
+    end
+    // Esto si es una verificacion, y por eso detiene la corrida: un contador
+    // que no coincide con lo que se observo no da un informe aproximado, da uno
+    // falso, y un informe falso es peor que ninguno.
+    if (metricas_malas != 0) begin
+      $display("RESULTADO: FALLA (los contadores de rendimiento no cuadran)");
+      $fatal(1, "%0d metrica(s) inconsistentes", metricas_malas);
     end
     // Deliberadamente NO se imprime "RESULTADO: OK". En este proyecto esa linea
     // significa "todos los casos pasaron", y aqui no hay casos: este ejecutor

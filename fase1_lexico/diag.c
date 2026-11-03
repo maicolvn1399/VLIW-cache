@@ -23,6 +23,32 @@ static int por_fase[5] = {0, 0, 0, 0, 0};
 static unsigned warn_activas = 0xFFFFFFFFu;
 static int warn_es_error = 0;
 
+/*
+ * Modo captura: el IDE pide los diagnosticos como datos, no como texto en
+ * stderr. Mientras este activo se guarda un registro por diagnostico y no se
+ * aborta al alcanzar el maximo de errores.
+ */
+static int capturando = 0;
+static DiagRegistro captura[DIAG_MAX_CAPTURA];
+static int captura_n = 0;
+
+void diag_capturar(int activo) {
+    capturando = activo ? 1 : 0;
+}
+
+int diag_capturados(void) {
+    return captura_n;
+}
+
+const DiagRegistro *diag_capturado(int i) {
+    if (i < 0 || i >= captura_n) return NULL;
+    return &captura[i];
+}
+
+void diag_limpiar_captura(void) {
+    captura_n = 0;
+}
+
 /* Devuelve el indice de bit de un codigo "W003", o -1 si no tiene esa forma. */
 static int indice_warn(const char *codigo) {
     int n;
@@ -101,6 +127,24 @@ static int leer_linea(int n, char *buf, size_t cap) {
 
 static void imprimir_diag(const char *severidad, const char *codigo, int linea,
                           int col, int largo, const char *fmt, va_list ap) {
+    if (capturando) {
+        /*
+         * Se guarda el diagnostico tal cual, sin la marca visual de ^: el
+         * subrayado lo dibuja la interfaz a partir de linea, columna y largo.
+         */
+        if (captura_n < DIAG_MAX_CAPTURA) {
+            DiagRegistro *r = &captura[captura_n++];
+            snprintf(r->severidad, sizeof(r->severidad), "%s", severidad);
+            snprintf(r->codigo, sizeof(r->codigo), "%s", codigo != NULL ? codigo : "");
+            snprintf(r->archivo, sizeof(r->archivo), "%s", archivo_fuente);
+            r->linea = linea;
+            r->columna = col;
+            r->largo = largo < 1 ? 1 : largo;
+            vsnprintf(r->mensaje, sizeof(r->mensaje), fmt, ap);
+        }
+        return;
+    }
+
     if (linea > 0 && col > 0)
         fprintf(stderr, "%s:%d:%d: %s[%s]: ", archivo_fuente, linea, col, severidad, codigo);
     else
@@ -141,7 +185,8 @@ void diag_error(const char *codigo, int linea, int col, int largo,
     imprimir_diag("error", codigo, linea, col, largo, fmt, ap);
     va_end(ap);
 
-    if (total_errores >= max_errores) {
+    /* En modo captura nunca se aborta: el IDE quiere la lista completa. */
+    if (!capturando && total_errores >= max_errores) {
         fprintf(stderr, "\nse alcanzo el maximo de %d errores (--max-errors)\n", max_errores);
         diag_resumen();
         exit(1);
@@ -170,7 +215,7 @@ void diag_advertencia(const char *codigo, int linea, int col, int largo,
     if (warn_es_error) {
         total_errores++;
         por_fase[3]++;
-        if (total_errores >= max_errores) {
+        if (!capturando && total_errores >= max_errores) {
             fprintf(stderr, "\nse alcanzo el maximo de %d errores (--max-errors)\n", max_errores);
             diag_resumen();
             exit(1);

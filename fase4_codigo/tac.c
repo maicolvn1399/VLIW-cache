@@ -980,78 +980,90 @@ static bool es_binaria(TACOp op) {
     return (op >= TAC_ADD && op <= TAC_GE);
 }
 
+/*
+ * Imprime UNA instruccion de tres direcciones, con su salto de linea.
+ *
+ * Vive aqui y no en quien la muestra para que todas las vistas del codigo
+ * intermedio -- '--ir', el grafo de flujo de '--bloques' y el panel del IDE--
+ * rindan la instruccion exactamente igual. Si cada una formateara por su
+ * cuenta, la misma instruccion se veria distinta segun por donde se la mire.
+ */
+void tac_print_inst(FILE *out, const TACInst *i) {
+    if (out == NULL || i == NULL) return;
+    if (es_binaria(i->op)) {
+        fprintf(out, "    %s = %s %s %s\n", i->result, i->arg1,
+                tac_op_nombre(i->op), i->arg2);
+        return;
+    }
+    switch (i->op) {
+        case TAC_NEG: case TAC_BITNOT: case TAC_NOT:
+            fprintf(out, "    %s = %s %s\n", i->result,
+                    tac_op_nombre(i->op), i->arg1); break;
+        case TAC_ASSIGN:
+            fprintf(out, "    %s = %s\n", i->result, i->arg1); break;
+        case TAC_CONST:
+            fprintf(out, "    %s = #%ld\n", i->result, i->valor); break;
+        case TAC_STR:
+            fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
+        case TAC_LOAD:
+            fprintf(out, "    %s = %s[%s]\n", i->result, i->arg1, i->arg2); break;
+        case TAC_STORE:
+            fprintf(out, "    %s[%s] = %s\n", i->result, i->arg1, i->arg2); break;
+        case TAC_ADDR:
+            fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
+        case TAC_LEN:
+            fprintf(out, "    %s = longitudo %s, dim %d\n", i->result, i->arg1, i->aux); break;
+        case TAC_CHECK:
+            fprintf(out, "    check %s, %s\n", i->arg1, i->arg2); break;
+        case TAC_LABEL:
+            fprintf(out, "%s:\n", i->result); break;
+        case TAC_GOTO:
+            fprintf(out, "    goto %s\n", i->result); break;
+        case TAC_IF_FALSE:
+            fprintf(out, "    ifFalse %s goto %s\n", i->arg1, i->result); break;
+        case TAC_IF_TRUE:
+            fprintf(out, "    ifTrue %s goto %s\n", i->arg1, i->result); break;
+        case TAC_FUNC_BEGIN:
+            fprintf(out, "\nfunctio %s:\n", i->result); break;
+        case TAC_FUNC_END:
+            fprintf(out, "fin %s\n", i->result); break;
+        case TAC_PARAM:
+            fprintf(out, "    param %s  (posicion %d)\n", i->arg1, i->aux); break;
+        case TAC_CALL:
+            if (i->result) fprintf(out, "    %s = call %s, %d\n", i->result, i->arg1, i->aux);
+            else           fprintf(out, "    call %s, %d\n", i->arg1, i->aux);
+            break;
+        case TAC_TAILCALL:
+            fprintf(out, "    tailcall %s, %d  (@cauda)\n", i->arg1, i->aux); break;
+        case TAC_RET:
+            fprintf(out, "    ret\n"); break;
+        case TAC_RET_VAL:
+            fprintf(out, "    ret %s\n", i->arg1); break;
+        case TAC_AUTHW:
+            fprintf(out, "    authw #%d, %s\n", i->aux, i->arg1); break;
+        case TAC_VAULT_LOGIN:
+            fprintf(out, "    vault.login\n"); break;
+        case TAC_VAULT_LOGOUT:
+            fprintf(out, "    vault.logout\n"); break;
+        case TAC_KSETW:
+            fprintf(out, "    vault.store #%ld, #%d, %s\n", i->valor, i->aux, i->arg2); break;
+        case TAC_FEISTEL:
+            fprintf(out, "    feistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
+        case TAC_FEISTEL_DECRYPT:
+            fprintf(out, "    desfeistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
+        case TAC_HALT:
+            fprintf(out, "    halt\n"); break;
+        default:
+            fprintf(out, "    nop\n"); break;
+    }
+}
+
 void tac_print(FILE *out, TACList *list) {
     if (list == NULL || out == NULL) return;
 
     fprintf(out, "=== Codigo intermedio de tres direcciones ===\n");
-    for (TACInst *i = list->head; i != NULL; i = i->next) {
-        if (es_binaria(i->op)) {
-            fprintf(out, "    %s = %s %s %s\n", i->result, i->arg1,
-                    tac_op_nombre(i->op), i->arg2);
-            continue;
-        }
-        switch (i->op) {
-            case TAC_NEG: case TAC_BITNOT: case TAC_NOT:
-                fprintf(out, "    %s = %s %s\n", i->result,
-                        tac_op_nombre(i->op), i->arg1); break;
-            case TAC_ASSIGN:
-                fprintf(out, "    %s = %s\n", i->result, i->arg1); break;
-            case TAC_CONST:
-                fprintf(out, "    %s = #%ld\n", i->result, i->valor); break;
-            case TAC_STR:
-                fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
-            case TAC_LOAD:
-                fprintf(out, "    %s = %s[%s]\n", i->result, i->arg1, i->arg2); break;
-            case TAC_STORE:
-                fprintf(out, "    %s[%s] = %s\n", i->result, i->arg1, i->arg2); break;
-            case TAC_ADDR:
-                fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
-            case TAC_LEN:
-                fprintf(out, "    %s = longitudo %s, dim %d\n", i->result, i->arg1, i->aux); break;
-            case TAC_CHECK:
-                fprintf(out, "    check %s, %s\n", i->arg1, i->arg2); break;
-            case TAC_LABEL:
-                fprintf(out, "%s:\n", i->result); break;
-            case TAC_GOTO:
-                fprintf(out, "    goto %s\n", i->result); break;
-            case TAC_IF_FALSE:
-                fprintf(out, "    ifFalse %s goto %s\n", i->arg1, i->result); break;
-            case TAC_IF_TRUE:
-                fprintf(out, "    ifTrue %s goto %s\n", i->arg1, i->result); break;
-            case TAC_FUNC_BEGIN:
-                fprintf(out, "\nfunctio %s:\n", i->result); break;
-            case TAC_FUNC_END:
-                fprintf(out, "fin %s\n", i->result); break;
-            case TAC_PARAM:
-                fprintf(out, "    param %s  (posicion %d)\n", i->arg1, i->aux); break;
-            case TAC_CALL:
-                if (i->result) fprintf(out, "    %s = call %s, %d\n", i->result, i->arg1, i->aux);
-                else           fprintf(out, "    call %s, %d\n", i->arg1, i->aux);
-                break;
-            case TAC_TAILCALL:
-                fprintf(out, "    tailcall %s, %d  (@cauda)\n", i->arg1, i->aux); break;
-            case TAC_RET:
-                fprintf(out, "    ret\n"); break;
-            case TAC_RET_VAL:
-                fprintf(out, "    ret %s\n", i->arg1); break;
-            case TAC_AUTHW:
-                fprintf(out, "    authw #%d, %s\n", i->aux, i->arg1); break;
-            case TAC_VAULT_LOGIN:
-                fprintf(out, "    vault.login\n"); break;
-            case TAC_VAULT_LOGOUT:
-                fprintf(out, "    vault.logout\n"); break;
-            case TAC_KSETW:
-                fprintf(out, "    vault.store #%ld, #%d, %s\n", i->valor, i->aux, i->arg2); break;
-            case TAC_FEISTEL:
-                fprintf(out, "    feistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
-            case TAC_FEISTEL_DECRYPT:
-                fprintf(out, "    desfeistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
-            case TAC_HALT:
-                fprintf(out, "    halt\n"); break;
-            default:
-                fprintf(out, "    nop\n"); break;
-        }
-    }
+    for (TACInst *i = list->head; i != NULL; i = i->next)
+        tac_print_inst(out, i);
     if (list->n_cadenas > 0) {
         fprintf(out, "\n=== Literales de cadena ===\n");
         for (TACCadena *c = list->cadenas; c != NULL; c = c->next)

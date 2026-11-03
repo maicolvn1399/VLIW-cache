@@ -1,0 +1,24 @@
+functio promedio(datos : integer[], n : integer) -> integer {
+    varia suma : integer = 0;
+    varia i : integer = 0;
+    dum (i < n) {
+        suma = suma + datos[i];
+        i = i + 1;
+    }
+    redde suma / n;
+}
+
+functio distinta(a : integer, b : integer) -> integer {
+    si (a > b) {
+        redde a - b;
+    }
+    si (b > a) {
+        redde b - a;
+    }
+    redde 0;
+}
+
+functio principale() -> integer {
+    varia v : integer[3] = {1, 2, 3};
+    redde promedio(v, 3) + distinta(4, 9);
+}
