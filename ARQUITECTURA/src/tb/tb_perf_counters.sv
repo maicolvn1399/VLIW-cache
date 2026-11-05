@@ -46,6 +46,7 @@ module tb_perf_counters;
 
   logic [31:0] ciclos, bundles, instrucciones;
   logic [`NSLOTS-1:0][31:0] ops_por_slot;
+  logic [31:0] accesos_load, accesos_store;
   logic [31:0] bundles_vacios, saltos_tomados, delay_vacios, ciclos_stall;
   logic        desbordado;
 
@@ -61,6 +62,8 @@ module tb_perf_counters;
       .bundles        (bundles),
       .instrucciones  (instrucciones),
       .ops_por_slot   (ops_por_slot),
+      .accesos_load   (accesos_load),
+      .accesos_store  (accesos_store),
       .bundles_vacios (bundles_vacios),
       .saltos_tomados (saltos_tomados),
       .delay_vacios   (delay_vacios),
@@ -91,6 +94,8 @@ module tb_perf_counters;
       .bundles        (bundles_chico),
       .instrucciones  (instr_chico),
       .ops_por_slot   (ops_chico),
+      .accesos_load   (),
+      .accesos_store  (),
       .bundles_vacios (vacios_chico),
       .saltos_tomados (saltos_chico),
       .delay_vacios   (delay_chico),
@@ -177,11 +182,24 @@ module tb_perf_counters;
   localparam logic [`BUNDLE_W-1:0] VACIO = 128'h0;
 
   logic [`BUNDLE_W-1:0] LLENO, SOLO_S2, SOLO_SALTO;
+  logic [`BUNDLE_W-1:0] SOLO_LOAD, SOLO_STORE, LOAD_INC, STORE_INC;
+  logic [`BUNDLE_W-1:0] LOAD_BYTE, STORE_HALF;
 
   initial begin
     LLENO      = arma(`ALU_ADD, `ALU_SUB, `LSU_LW,  `CRP_SALU, `BRU_BR);
     SOLO_S2    = arma(`ALU_NOP, `ALU_NOP, `LSU_SW,  `CRP_NOP,  `BRU_NOP);
     SOLO_SALTO = arma(`ALU_NOP, `ALU_NOP, `LSU_NOP, `CRP_NOP,  `BRU_BR);
+
+    // Los accesos a memoria, uno de cada forma. Se prueban todas las variantes
+    // porque el contador no decodifica el opcode completo: mira un solo bit, y
+    // una variante nueva que lo pusiera al reves se contaria del lado opuesto
+    // sin que nada mas cambiara.
+    SOLO_LOAD  = arma(`ALU_NOP, `ALU_NOP, `LSU_LW,     `CRP_NOP, `BRU_NOP);
+    SOLO_STORE = arma(`ALU_NOP, `ALU_NOP, `LSU_SW,     `CRP_NOP, `BRU_NOP);
+    LOAD_INC   = arma(`ALU_NOP, `ALU_NOP, `LSU_LW_INC, `CRP_NOP, `BRU_NOP);
+    STORE_INC  = arma(`ALU_NOP, `ALU_NOP, `LSU_SW_INC, `CRP_NOP, `BRU_NOP);
+    LOAD_BYTE  = arma(`ALU_NOP, `ALU_NOP, `LSU_LBU,    `CRP_NOP, `BRU_NOP);
+    STORE_HALF = arma(`ALU_NOP, `ALU_NOP, `LSU_SH,     `CRP_NOP, `BRU_NOP);
   end
 
   // ---------------------------------------------------------------------------
@@ -352,6 +370,47 @@ module tb_perf_counters;
     check("instrucciones",     instrucciones,   1);
     check("ocupacion de S4",   ops_por_slot[4], 1);
     check("saltos tomados",    saltos_tomados,  0);
+
+    // ---- 7b. Loads y stores -------------------------------------------------
+    // La tabla 2 del enunciado pide los accesos desglosados por read y write, y
+    // hasta que exista la cache estos dos contadores son tambien la base del
+    // calculo de la linea sin cache: cada uno de ellos seria un viaje a memoria
+    // principal de T_mem ciclos.
+    $display("");
+    $display("[7b] los accesos a memoria, separados por sentido");
+    reiniciar();
+
+    paso(SOLO_LOAD,  1'b1, 1'b0);
+    check("un load contado",     accesos_load,  1);
+    check("y ningun store",      accesos_store, 0);
+
+    paso(SOLO_STORE, 1'b1, 1'b0);
+    check("un store contado",    accesos_store, 1);
+    check("y el load no subio",  accesos_load,  1);
+
+    $display("");
+    $display("    todas las variantes de acceso caen del lado correcto");
+    paso(LOAD_INC,   1'b1, 1'b0);
+    check("LW.INC cuenta como load",  accesos_load,  2);
+    paso(LOAD_BYTE,  1'b1, 1'b0);
+    check("LBU cuenta como load",     accesos_load,  3);
+    paso(STORE_INC,  1'b1, 1'b0);
+    check("SW.INC cuenta como store", accesos_store, 2);
+    paso(STORE_HALF, 1'b1, 1'b0);
+    check("SH cuenta como store",     accesos_store, 3);
+
+    $display("");
+    $display("    la suma cierra contra la ranura S2");
+    check("loads + stores", accesos_load + accesos_store, ops_por_slot[2]);
+
+    // Un bundle sin acceso a memoria no mueve ninguno de los dos
+    paso(SOLO_SALTO, 1'b1, 1'b0);
+    check("un bundle sin LSU no suma loads",  accesos_load,  3);
+    check("ni stores",                        accesos_store, 3);
+
+    // Y un bundle invalido tampoco, igual que con el resto de los contadores
+    paso(SOLO_LOAD, 1'b0, 1'b0);
+    check("un bundle invalido no suma loads", accesos_load,  3);
 
     // ---- 8. Saturacion -----------------------------------------------------
     // La instancia angosta llega al tope en 255 ciclos. Lo que se comprueba es

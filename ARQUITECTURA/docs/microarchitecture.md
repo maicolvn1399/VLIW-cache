@@ -557,6 +557,11 @@ versión.
 | `load_align.sv` | MEM | Extrae el dato pedido de la palabra leída | `tb_lsu.sv` |
 | `psw_fault_unit.sv` | WB | PSW, detección de `WCONF`, registro de fallas | `tb_psw_fault_unit.sv`, `tb_wconf.sv` |
 | `perf_counters.sv` | ID (observa) | Contadores de rendimiento; no devuelve nada al datapath. Ver [`metricas.md`](metricas.md) | `tb_perf_counters.sv` |
+| `mem_system.sv` | (fuera del pipeline) | Memoria principal con latencia realista: reloj de 25 MHz, T_mem de 53 ciclos y eviction buffer. Todavía no conectado; ver [`memoria.md`](memoria.md) | `tb_mem_system.sv` |
+| `mem_clock_gen.sv` | | El dominio de 25 MHz y su pulso de habilitación | `tb_mem_clock_gen.sv` |
+| `main_memory.sv` | | Los 64 KB de memoria principal | `tb_mem_system.sv` |
+| `mem_controller.sv` | | La máquina de estados de la latencia y el burst | `tb_mem_system.sv` |
+| `eviction_buffer.sv` | | FIFO de líneas sucias, con detección de riesgo RAW | `tb_eviction_buffer.sv` |
 | `cerbero_defs.svh` | | Constantes de la ISA | |
 
 `tb_pipeline.sv` y `tb_latency.sv` miden la latencia de 3 bundles sobre los registros de segmentación reales.

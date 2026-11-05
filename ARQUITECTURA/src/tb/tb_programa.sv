@@ -100,6 +100,7 @@ module tb_programa;
   // Contadores de hardware (perf_counters.sv)
   logic [31:0]              hw_ciclos, hw_bundles, hw_instrucciones;
   logic [`NSLOTS-1:0][31:0] hw_ops_slot;
+  logic [31:0]              hw_loads, hw_stores;
   logic [31:0]              hw_vacios, hw_saltos, hw_delay, hw_stall;
   logic                     hw_desbordado;
 
@@ -118,6 +119,8 @@ module tb_programa;
       .perf_bundles        (hw_bundles),
       .perf_instrucciones  (hw_instrucciones),
       .perf_ops_slot       (hw_ops_slot),
+      .perf_loads          (hw_loads),
+      .perf_stores         (hw_stores),
       .perf_bundles_vacios (hw_vacios),
       .perf_saltos         (hw_saltos),
       .perf_delay_vacios   (hw_delay),
@@ -177,6 +180,8 @@ module tb_programa;
 
   integer tb_instrucciones = 0;
   integer tb_ops_slot [0:`NSLOTS-1];
+  integer tb_loads  = 0;
+  integer tb_stores = 0;
 
   function automatic integer ranuras_ocupadas(input logic [`BUNDLE_W-1:0] b);
     logic [31:0] q0, q1, q2;
@@ -201,6 +206,7 @@ module tb_programa;
   always @(posedge clk) begin
     logic [31:0] w0, w1, w2;
     logic [15:0] w3, w4;
+    logic [4:0]  opc2;   // Icarus no encadena un rango con un indice
     if (rst_n && dut.id_valid) begin
       tb_instrucciones = tb_instrucciones + ranuras_ocupadas(dut.id_bundle);
       w0 = dut.id_bundle[`SLOT_S0];  w1 = dut.id_bundle[`SLOT_S1];
@@ -208,7 +214,13 @@ module tb_programa;
       w4 = dut.id_bundle[`SLOT_S4];
       if (w0[`F_OPC]  != `ALU_NOP) tb_ops_slot[0] = tb_ops_slot[0] + 1;
       if (w1[`F_OPC]  != `ALU_NOP) tb_ops_slot[1] = tb_ops_slot[1] + 1;
-      if (w2[`F_OPC]  != `LSU_NOP) tb_ops_slot[2] = tb_ops_slot[2] + 1;
+      opc2 = w2[`F_OPC];
+      if (opc2 != `LSU_NOP) begin
+        tb_ops_slot[2] = tb_ops_slot[2] + 1;
+        // El bit LSU_BIT_ST del opcode separa store de load
+        if (opc2[`LSU_BIT_ST]) tb_stores = tb_stores + 1;
+        else                   tb_loads  = tb_loads  + 1;
+      end
       if (w3[`S3_OPC] != `CRP_NOP) tb_ops_slot[3] = tb_ops_slot[3] + 1;
       if (w4[`S4_OPC] != `BRU_NOP) tb_ops_slot[4] = tb_ops_slot[4] + 1;
     end
@@ -629,7 +641,8 @@ module tb_programa;
       $fdisplay(salida, "    ocupacion por ranura");
       $fdisplay(salida, "      S0 ALU-0   %8d", hw_ops_slot[0]);
       $fdisplay(salida, "      S1 ALU-1   %8d", hw_ops_slot[1]);
-      $fdisplay(salida, "      S2 LSU     %8d", hw_ops_slot[2]);
+      $fdisplay(salida, "      S2 LSU     %8d   (%0d loads, %0d stores)",
+                hw_ops_slot[2], hw_loads, hw_stores);
       $fdisplay(salida, "      S3 cripto  %8d", hw_ops_slot[3]);
       $fdisplay(salida, "      S4 BRU     %8d", hw_ops_slot[4]);
 
@@ -642,6 +655,15 @@ module tb_programa;
       for (k = 0; k < `NSLOTS; k = k + 1)
         comparar(salida, $sformatf("ranura S%0d", k), hw_ops_slot[k],
                  tb_ops_slot[k]);
+      comparar(salida, "loads",  hw_loads,  tb_loads);
+      comparar(salida, "stores", hw_stores, tb_stores);
+
+      // La suma tiene que cerrar contra la ranura: todo acceso a memoria es un
+      // load o un store, no hay un tercer caso. Si esta comparacion fallara,
+      // alguno de los dos contadores estaria mirando el bit equivocado del
+      // opcode y los dos numeros serian creibles por separado.
+      comparar(salida, "loads + stores = S2", hw_loads + hw_stores,
+               hw_ops_slot[2]);
 
       if (hw_desbordado) begin
         metricas_malas = metricas_malas + 1;

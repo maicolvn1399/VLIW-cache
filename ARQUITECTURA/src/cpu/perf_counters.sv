@@ -104,6 +104,13 @@ module perf_counters #(
     output logic [CNT_W-1:0] bundles,         // bundles despachados
     output logic [CNT_W-1:0] instrucciones,   // operaciones no-NOP
     output logic [`NSLOTS-1:0][CNT_W-1:0] ops_por_slot,  // ocupacion de cada slot
+
+    // Accesos a memoria, separados por sentido. El enunciado los pide asi en su
+    // tabla 2 (hits y misses desglosados por read y write), y hasta que exista
+    // la cache son tambien la cuenta de cuantas veces el programa tendria que
+    // ir a memoria principal: la base del calculo de la linea sin cache.
+    output logic [CNT_W-1:0] accesos_load,
+    output logic [CNT_W-1:0] accesos_store,
     output logic [CNT_W-1:0] bundles_vacios,  // bundles con sus cinco slots en NOP
     output logic [CNT_W-1:0] saltos_tomados,  // saltos que se tomaron
     output logic [CNT_W-1:0] delay_vacios,    // delay slots que no traian trabajo
@@ -139,6 +146,19 @@ module perf_counters #(
   assign ocupado[2] = (s2[`F_OPC]  != `LSU_NOP);
   assign ocupado[3] = (s3[`S3_OPC] != `CRP_NOP);
   assign ocupado[4] = (s4[`S4_OPC] != `BRU_NOP);
+
+  // El opcode de S2 esta estructurado por campos (cerbero_defs.svh): el bit
+  // LSU_BIT_ST distingue un store de un load. Mirar ese bit, en vez de
+  // enumerar los once opcodes de la LSU, es lo que hace que agregar una
+  // variante de acceso manana no obligue a tocar este modulo.
+  // El opcode se extrae a una senal propia porque Icarus no acepta encadenar
+  // un rango con un indice: s2[`F_OPC][`LSU_BIT_ST] no elabora.
+  logic [4:0] s2_opc;
+  assign s2_opc = s2[`F_OPC];
+
+  logic es_load, es_store;
+  assign es_store = ocupado[2] &&  s2_opc[`LSU_BIT_ST];
+  assign es_load  = ocupado[2] && !s2_opc[`LSU_BIT_ST];
 
   // Cuantas ranuras ocupadas trae el bundle: de 0 a 5, tres bits
   logic [2:0] ranuras_usadas;
@@ -181,7 +201,7 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 12;
+  localparam int NCONT = 14;
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -191,6 +211,8 @@ module perf_counters #(
   localparam int C_SALTOS   = 9;
   localparam int C_DELAY    = 10;
   localparam int C_STALL    = 11;
+  localparam int C_LOAD     = 12;
+  localparam int C_STORE    = 13;
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
@@ -218,6 +240,8 @@ module perf_counters #(
 
       if (ranuras_usadas == 3'd0) inc[C_VACIOS] = 3'd1;
       if (id_taken)               inc[C_SALTOS] = 3'd1;
+      if (es_load)                inc[C_LOAD]   = 3'd1;
+      if (es_store)               inc[C_STORE]  = 3'd1;
 
       // Un delay slot vacio es el costo real de un salto en este procesador:
       // un bundle que se ejecuto por obligacion y no hizo nada.
@@ -257,6 +281,8 @@ module perf_counters #(
   assign saltos_tomados = cont[C_SALTOS];
   assign delay_vacios   = cont[C_DELAY];
   assign ciclos_stall   = cont[C_STALL];
+  assign accesos_load   = cont[C_LOAD];
+  assign accesos_store  = cont[C_STORE];
 
   genvar g;
   generate

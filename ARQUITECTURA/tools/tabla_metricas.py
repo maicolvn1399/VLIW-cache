@@ -35,7 +35,21 @@ CAMPOS = {
     "s2":            r"S2 LSU\s+(\d+)",
     "s3":            r"S3 cripto\s+(\d+)",
     "s4":            r"S4 BRU\s+(\d+)",
+    "loads":         r"S2 LSU\s+\d+\s+\((\d+) loads",
+    "stores":        r"S2 LSU\s+\d+\s+\(\d+ loads, (\d+) stores",
 }
+
+# ---------------------------------------------------------------------------
+# Modelo de la linea base sin cache (Iteracion 2)
+#
+# Estos numeros salen de cerbero_defs.svh y tienen que coincidir con los del
+# RTL. Se repiten aqui porque un script de Python no puede incluir un .svh;
+# tb_mem_system.sv comprueba contra el RTL que T_MEM vale lo que dice aca.
+# ---------------------------------------------------------------------------
+MEM_FIRST_WORD = 25
+LINE_WORDS = 8
+MEM_CLK_DIV = 4
+T_MEM = MEM_FIRST_WORD + (LINE_WORDS - 1) * MEM_CLK_DIV   # 53
 
 
 def leer(ruta):
@@ -61,6 +75,72 @@ def leer(ruta):
 
 def razon(numerador, denominador):
     return numerador / denominador if denominador else 0.0
+
+
+def proyectar_sin_cache(filas, ancho):
+    """Proyecta el costo de correr sin cache, desde los contadores medidos.
+
+    No es una simulacion: es una cuenta sobre numeros que el hardware conto de
+    verdad. El modelo es el de la Iteracion 2, donde no hay ningun nivel de
+    cache y cada acceso del programa va a memoria principal.
+
+      load    el procesador se detiene T_mem ciclos esperando la linea. En el
+              modelo ideal ese acceso costaba 1 ciclo, asi que el costo que se
+              AGREGA es T_mem - 1.
+
+      store   el eviction buffer lo acepta en un ciclo y lo drena despues, con
+              el procesador ya corriendo. En el caso favorable no agrega nada.
+
+    De ahi salen las dos columnas, que son cotas y no estimaciones:
+
+      optimista    solo los loads detienen. Supone que el buffer nunca se llena
+                   y que ningun load pide una linea que todavia este encolada.
+                   Es lo mejor que podria pasar.
+
+      pesimista    todo acceso detiene T_mem. Es lo que ocurriria si el buffer
+                   estuviera siempre lleno, o con una politica write-through
+                   sincrona sin buffer.
+
+    El valor real cae entre las dos y depende del patron de accesos, que es
+    justamente lo que la Iteracion 3 va a medir en vez de suponer. Las dos cotas
+    se reportan juntas a proposito: dar un solo numero aqui seria presentar una
+    suposicion como si fuera una medicion.
+    """
+    print(f"  proyeccion sin cache, con T_mem = {T_MEM} ciclos")
+    print()
+    print(f"  {'programa':<{ancho}}  {'ideal':>9}  {'loads':>7}  {'stores':>7}  "
+          f"{'optimista':>11}  {'x':>5}  {'pesimista':>11}  {'x':>5}")
+    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 7}  {'-' * 7}  "
+          f"{'-' * 11}  {'-' * 5}  {'-' * 11}  {'-' * 5}")
+
+    tot_ideal = tot_opt = tot_pes = 0
+
+    for f in filas:
+        ideal = f["ciclos"]
+        # El acceso ya costaba un ciclo en el modelo ideal, de ahi el -1
+        opt = ideal + f["loads"] * (T_MEM - 1)
+        pes = ideal + (f["loads"] + f["stores"]) * (T_MEM - 1)
+
+        tot_ideal += ideal
+        tot_opt += opt
+        tot_pes += pes
+
+        print(f"  {f['programa']:<{ancho}}  {ideal:>9}  {f['loads']:>7}  "
+              f"{f['stores']:>7}  {opt:>11}  {razon(opt, ideal):>5.1f}  "
+              f"{pes:>11}  {razon(pes, ideal):>5.1f}")
+
+    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 7}  {'-' * 7}  "
+          f"{'-' * 11}  {'-' * 5}  {'-' * 11}  {'-' * 5}")
+    print(f"  {'total':<{ancho}}  {tot_ideal:>9}  "
+          f"{sum(f['loads'] for f in filas):>7}  "
+          f"{sum(f['stores'] for f in filas):>7}  "
+          f"{tot_opt:>11}  {razon(tot_opt, tot_ideal):>5.1f}  "
+          f"{tot_pes:>11}  {razon(tot_pes, tot_ideal):>5.1f}")
+    print()
+    print("  Las columnas 'x' son cuantas veces mas lento que el modelo ideal")
+    print("  del Proyecto I, donde la memoria respondia siempre en un ciclo.")
+    print("  Ese es el margen que la jerarquia de cache tiene para recuperar.")
+    print()
 
 
 def main():
@@ -122,6 +202,8 @@ def main():
         for s, v in totales.items())
     print(f"  reparto del total ({total_instr} operaciones)   {reparto}")
     print()
+
+    proyectar_sin_cache(filas, ancho)
 
     if any(f["desbordado"] for f in filas):
         print("  AVISO: alguna corrida desbordo sus contadores; esos numeros")

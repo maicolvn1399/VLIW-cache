@@ -13,6 +13,7 @@ Escuela de Ingeniería en Computadores, Instituto Tecnológico de Costa Rica.
 | Microarquitectura | [`docs/microarchitecture.md`](docs/microarchitecture.md) |
 | Modelo de simulación | [`docs/simulation.md`](docs/simulation.md) |
 | **Métricas y línea base (Proyecto II)** | [`docs/metricas.md`](docs/metricas.md) |
+| **Memoria principal y T_mem (Proyecto II)** | [`docs/memoria.md`](docs/memoria.md) |
 | Integración con CE1108 | [`docs/compiler-integration.md`](docs/compiler-integration.md) |
 | **Respuesta a la revisión** | [`docs/respuesta_a_la_revision.md`](docs/respuesta_a_la_revision.md) |
 | **Escribir un programa de cero** | [`docs/escribir_programas.md`](docs/escribir_programas.md) |

@@ -340,4 +340,73 @@
 `define SEC_BASE_DEF  32'h0000_7000
 `define SEC_LIMIT_DEF 32'h0000_7FFF
 
+//==============================================================================
+// JERARQUIA DE MEMORIA  (Proyecto Grupal II)
+//
+// Nada de esta seccion cambia el ISA: son parametros de microarquitectura. El
+// formato de bundle, los opcodes y los registros quedan exactamente como se
+// definieron en el Proyecto Grupal I.
+//
+// Las latencias estan en CICLOS DE PROCESADOR salvo donde se diga lo
+// contrario. La razon de frecuencias es la unica constante que convierte entre
+// los dos dominios, y por eso se escribe una sola vez aqui.
+//==============================================================================
+
+//------------------------------------------------------------------------------
+// Linea de cache: 32 bytes = 8 palabras de 32 bits
+//------------------------------------------------------------------------------
+`define LINE_BYTES  32
+`define LINE_WORDS   8
+`define LINE_W     256   // LINE_WORDS * XLEN
+
+// Campos de una direccion vistos por la jerarquia de memoria
+`define LINE_OFF_W   5   // log2(LINE_BYTES): bits de desplazamiento dentro de la linea
+`define LINE_WIDX  4:2   // cual de las 8 palabras de la linea
+`define LINE_BOFF  1:0   // byte dentro de la palabra
+
+//------------------------------------------------------------------------------
+// Memoria principal: 64 KB
+//------------------------------------------------------------------------------
+`define MEM_WORDS 16384            // 64 KB en palabras de 32 bits
+`define MEM_LINES  2048            // MEM_WORDS / LINE_WORDS
+`define MEM_LIDX_W   11            // log2(MEM_LINES)
+
+//------------------------------------------------------------------------------
+// Dominio de reloj de la memoria
+//
+// El procesador corre a 100 MHz. La memoria corre a 100/MEM_CLK_DIV MHz, dentro
+// del rango 20-50 MHz que fija el enunciado. Con el divisor en 4 la memoria
+// queda en 25 MHz, que es el punto medio del rango y un divisor entero exacto.
+//------------------------------------------------------------------------------
+`define MEM_CLK_DIV  4             // 100 MHz / 4 = 25 MHz
+
+//------------------------------------------------------------------------------
+// Latencia de memoria principal
+//
+//   T_mem = MEM_FIRST_WORD + (LINE_WORDS - 1) * MEM_CLK_DIV
+//         = 25 + 7 * 4
+//         = 53 ciclos de procesador
+//
+// La primera palabra cuesta 25 ciclos de PROCESADOR desde que se emite la
+// solicitud. Las 7 restantes salen a razon de una por ciclo de MEMORIA, y por
+// eso se multiplican por la razon de frecuencias.
+//
+// MEM_FIRST_WORD tiene que ser mayor que MEM_CLK_DIV para que la fase de
+// latencia contenga al menos un flanco de memoria completo; con 25 y 4 sobra.
+//------------------------------------------------------------------------------
+`define MEM_FIRST_WORD 25          // ciclos de procesador hasta la primera palabra
+`define MEM_BURST_REST (`LINE_WORDS - 1)
+`define T_MEM (`MEM_FIRST_WORD + `MEM_BURST_REST * `MEM_CLK_DIV)
+
+//------------------------------------------------------------------------------
+// Buffers de escritura obligatorios (enunciado 3.4)
+//
+// El eviction buffer va hacia memoria principal y el enunciado lo acota entre 4
+// y 16 entradas. Se eligen 8, que es potencia de dos (el indice del FIFO no
+// necesita comparacion contra un tope que no sea una mascara) y queda en el
+// medio del rango permitido.
+//------------------------------------------------------------------------------
+`define EVICT_ENTRIES 8
+`define EVICT_IDX_W   3            // log2(EVICT_ENTRIES)
+
 `endif // CERBERO_DEFS_SVH

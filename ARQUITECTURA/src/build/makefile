@@ -66,6 +66,10 @@ RTL_UNITS := $(patsubst $(CPU)/%.sv,%,$(wildcard $(CPU)/*.sv))
 # del testbench, no del modulo.
 SUB_lsu := $(CPU)/load_align.sv
 SUB_top := $(filter-out $(CPU)/top.sv,$(wildcard $(CPU)/*.sv))
+# El subsistema de memoria de la Iteracion 2: mem_system.sv instancia las otras
+# cuatro piezas, asi que las arrastra consigo para compilar y para el lint.
+SUB_mem_system := $(CPU)/mem_clock_gen.sv $(CPU)/main_memory.sv \
+                  $(CPU)/eviction_buffer.sv $(CPU)/mem_controller.sv
 
 # ---- Dependencias extra por unidad (agregar aqui) ---------------------------
 DEPS_crypto_unit  := $(TB)/key_vault_model.sv
