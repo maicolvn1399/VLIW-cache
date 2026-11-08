@@ -49,7 +49,7 @@ module tb_mem_system;
   logic                    ev_push;
   logic [`MEM_LIDX_W-1:0]  ev_linea;
   logic [`LINE_W-1:0]      ev_datos;
-  logic [`LINE_WORDS-1:0]  ev_mascara;
+  logic [`LINE_MASK_W-1:0] ev_mascara;
   logic                    ev_lleno;
 
   logic                    mem_clk, ocupado, ev_vacio, raw_conflicto;
@@ -204,9 +204,22 @@ module tb_mem_system;
     end
   endtask
 
+  // La mascara del buffer es por BYTE. Estas pruebas razonan casi siempre en
+  // palabras, asi que mp() expande una mascara de 8 palabras a los 32 bits de
+  // byte que el modulo espera. Las pruebas que si razonan por byte arman la
+  // mascara a mano, que es justamente de lo que se trata el caso 9.
+  function automatic logic [`LINE_MASK_W-1:0] mp(input logic [`LINE_WORDS-1:0] palabras);
+    integer w;
+    begin
+      mp = '0;
+      for (w = 0; w < `LINE_WORDS; w = w + 1)
+        if (palabras[w]) mp[w*4 +: 4] = 4'hF;
+    end
+  endfunction
+
   task automatic depositar(input logic [`MEM_LIDX_W-1:0] l,
                            input logic [`LINE_W-1:0]     d,
-                           input logic [`LINE_WORDS-1:0] m);
+                           input logic [`LINE_MASK_W-1:0] m);
     begin
       ev_push    = 1'b1;
       ev_linea   = l;
@@ -322,7 +335,7 @@ module tb_mem_system;
     sembrar_memoria();
 
     check1("el buffer arranca vacio", ev_vacio, 1'b1);
-    depositar(11'd50, linea_patron(32'hDEAD_0000), 8'hFF);
+    depositar(11'd50, linea_patron(32'hDEAD_0000), mp(8'hFF));
     check("una entrada encolada", ev_ocupadas, 1);
 
     esperar_drenado();
@@ -342,7 +355,7 @@ module tb_mem_system;
     reiniciar();
     sembrar_memoria();
     // Solo las palabras 2 y 5 estan sucias
-    depositar(11'd60, linea_patron(32'hBEEF_0000), 8'b0010_0100);
+    depositar(11'd60, linea_patron(32'hBEEF_0000), mp(8'b0010_0100));
     esperar_drenado();
 
     base = 32'h5EED_0000 + 60 * `LINE_WORDS;
@@ -367,7 +380,7 @@ module tb_mem_system;
     reiniciar();
     sembrar_memoria();
 
-    depositar(11'd70, linea_patron(32'hCAFE_0000), 8'hFF);
+    depositar(11'd70, linea_patron(32'hCAFE_0000), mp(8'hFF));
     req       = 1'b1;
     req_linea = 11'd70;
     #1;
@@ -393,7 +406,7 @@ module tb_mem_system;
     sembrar_memoria();
 
     // Se encola un desalojo a una linea LEJANA y se pide otra en el mismo ciclo
-    depositar(11'd500, linea_patron(32'hF00D_0000), 8'hFF);
+    depositar(11'd500, linea_patron(32'hF00D_0000), mp(8'hFF));
     leer_linea(11'd600, ciclos, datos);
     check("la lectura no espero al drenado", ciclos, `T_MEM);
 
@@ -417,7 +430,7 @@ module tb_mem_system;
     // distintas en ocho ciclos, contra T_mem ciclos por drenado
     for (i = 0; i < `EVICT_ENTRIES; i = i + 1)
       depositar(11'd1000 + i[`MEM_LIDX_W-1:0],
-                linea_patron(32'hA000_0000 + i * 32'h1000), 8'hFF);
+                linea_patron(32'hA000_0000 + i * 32'h1000), mp(8'hFF));
 
     check1("el buffer esta lleno", ev_lleno, 1'b1);
 
@@ -428,6 +441,69 @@ module tb_mem_system;
       check_hex($sformatf("la linea %0d llego a memoria", 1000 + i),
                 dut.u_mem.storage[(1000 + i) * `LINE_WORDS],
                 32'hA000_0000 + i * 32'h1000);
+
+    // ---- 8. Dos escrituras seguidas a la misma linea -----------------------
+    // Esta prueba existe por un bug real que la Iteracion 3 destapó, y que
+    // ninguna prueba anterior veia porque todas depositaban lineas distintas o
+    // dejaban drenar en medio.
+    //
+    // Dos stores consecutivos a palabras distintas de la misma linea llegan al
+    // buffer en ciclos seguidos. En el segundo ciclo, el controlador ya decidio
+    // drenar la entrada y se llevo una COPIA de ella, pero su maquina todavia
+    // marca el bus como libre. Si la fusion no se excluyera en ESE ciclo, el
+    // segundo store se escribiria sobre una entrada cuya copia ya iba en
+    // camino, y se perderia 53 ciclos despues sin ninguna senal de error.
+    //
+    // El sintoma era exactamente este: una de las dos palabras en memoria y la
+    // otra en cero.
+    $display("");
+    $display("[8] dos escrituras seguidas a la misma linea, sin perder ninguna");
+    reiniciar();
+    sembrar_memoria();
+
+    // Palabra 0 de la linea 80, y en el ciclo siguiente la palabra 1
+    datos = '0;
+    datos[0 +: `XLEN] = 32'h1111_1111;
+    depositar(11'd80, datos, 32'h0000_000F);
+
+    datos = '0;
+    datos[`XLEN +: `XLEN] = 32'h2222_2222;
+    depositar(11'd80, datos, 32'h0000_00F0);
+
+    esperar_drenado();
+
+    check_hex("la palabra 0 llego", dut.u_mem.storage[80 * `LINE_WORDS],
+              32'h1111_1111);
+    check_hex("la palabra 1 tambien",
+              dut.u_mem.storage[80 * `LINE_WORDS + 1], 32'h2222_2222);
+
+    // Y las seis restantes de la linea quedaron intactas
+    base = 32'h5EED_0000 + 80 * `LINE_WORDS;
+    check_hex("la palabra 2 intacta",
+              dut.u_mem.storage[80 * `LINE_WORDS + 2], base + 2);
+    check_hex("la palabra 7 intacta",
+              dut.u_mem.storage[80 * `LINE_WORDS + 7], base + 7);
+
+    $display("");
+    $display("    y tres seguidas, incluido un byte suelto");
+    reiniciar();
+    sembrar_memoria();
+
+    datos = '0;  datos[0 +: `XLEN] = 32'hAAAA_AAAA;
+    depositar(11'd90, datos, 32'h0000_000F);
+    datos = '0;  datos[`XLEN +: `XLEN] = 32'hBBBB_BBBB;
+    depositar(11'd90, datos, 32'h0000_00F0);
+    datos = '0;  datos[2*`XLEN +: 8] = 8'hCC;
+    depositar(11'd90, datos, 32'h0000_0100);
+
+    esperar_drenado();
+
+    base = 32'h5EED_0000 + 90 * `LINE_WORDS;
+    check_hex("palabra 0", dut.u_mem.storage[90 * `LINE_WORDS],     32'hAAAA_AAAA);
+    check_hex("palabra 1", dut.u_mem.storage[90 * `LINE_WORDS + 1], 32'hBBBB_BBBB);
+    check_hex("el byte suelto de la palabra 2",
+              dut.u_mem.storage[90 * `LINE_WORDS + 2],
+              (base + 2) & 32'hFFFF_FF00 | 32'h0000_00CC);
 
 `ifdef FORCE_FAIL
     check("caso inyectado a proposito", ciclos, 12345);

@@ -148,6 +148,23 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
   cursor: pointer;
   padding: 3px 2px;
 }
+
+/* Casilla de -O1, junto al selector de modo y con su mismo aspecto. */
+.casilla {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  background: var(--fondo-3);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  color: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.casilla:hover { border-color: var(--acento); color: var(--texto); }
+.casilla input { accent-color: var(--acento); cursor: pointer; margin: 0; }
+.casilla:has(input:checked) { border-color: var(--acento); color: var(--acento); }
 .selector select:focus { outline: none; }
 .selector option { background: var(--fondo-3); }
 
@@ -827,6 +844,62 @@ table.datos .tip { color: var(--verde); }
 }
 .flujo-detalle pre b { color: var(--acento); font-weight: 400; cursor: pointer; }
 .flujo-detalle pre b:hover { text-decoration: underline; }
+
+/* ------------------------------------- vivacidad y codigo muerto (Iter. 3) */
+
+/*
+ * Los conjuntos del analisis. Van en tabla y no en pastillas sueltas porque lo
+ * que importa es poder compararlos de un vistazo: USO contra DEF arriba, lo
+ * que entra contra lo que sale abajo.
+ */
+.conjuntos {
+  width: 100%;
+  margin: 0 0 11px;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.conjuntos th {
+  width: 72px;
+  padding: 3px 8px 3px 0;
+  text-align: left;
+  color: var(--texto-debil);
+  font-weight: 400;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.conjuntos td { padding: 3px 0; color: var(--texto-tenue); word-break: break-word; }
+.conjuntos tr.sep th, .conjuntos tr.sep td { border-top: 1px solid var(--borde); padding-top: 6px; }
+
+/*
+ * Una instruccion que -O1 elimina. Tachada y apagada: sigue ahi para que se
+ * entienda por que sobra, pero se lee como lo que es, algo que no va a llegar
+ * al procesador.
+ */
+.flujo-detalle pre .tac-muerta {
+  color: var(--texto-debil);
+  text-decoration: line-through;
+  text-decoration-color: var(--rojo-claro);
+  opacity: 0.72;
+}
+/* La llamada se queda; lo que sobra es guardar su resultado. */
+.flujo-detalle pre .tac-sinuso {
+  color: var(--ambar);
+  text-decoration: underline dotted var(--ambar);
+  text-underline-offset: 3px;
+}
+.nota-muerta {
+  margin-top: 9px;
+  color: var(--texto-debil);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.nota-muerta code {
+  font-family: var(--mono);
+  background: var(--fondo-3);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
 .leyenda { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 11px; color: var(--texto-debil); font-size: 10.5px; }
 .leyenda i { display: inline-block; width: 16px; height: 0; border-top: 2px solid #4a5570; vertical-align: middle; margin-right: 5px; }
 .leyenda i.regreso { border-top: 2px dashed var(--ambar); }

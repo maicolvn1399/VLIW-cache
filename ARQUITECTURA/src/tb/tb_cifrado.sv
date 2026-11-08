@@ -177,6 +177,8 @@ module tb_cifrado;
            w === llave[63:32]  || w === llave[31:0];
   endfunction
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_cifrado.vcd");
@@ -197,10 +199,10 @@ module tb_cifrado;
     #1;
     $readmemh(prog_cifrar,         cif.u_imem.storage);
     $readmemh(prog_descifrar,      des.u_imem.storage);
-    $readmemh("archivo_libre.hex", cif.u_dmem.storage);
+    $readmemh("archivo_libre.hex", cif.u_mem_sys.u_mem.storage);
 
     for (i = 0; i < N_WORDS; i = i + 1)
-      original[i] = cif.u_dmem.storage[i];
+      original[i] = cif.u_mem_sys.u_mem.storage[i];
 
     n_bytes    = original[W_BUF];
     n_bloques  = original[W_BUF + 1];
@@ -241,6 +243,21 @@ module tb_cifrado;
     repeat (8) @(posedge clk);
     #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(cif.mem_drenada && des.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
     $display("  (se detuvo tras %0d ciclos)", c);
 
     check1("el procesador que cifra se detuvo", halt_c, 1'b1);
@@ -249,18 +266,18 @@ module tb_cifrado;
     diagnostico("cifra", psw_c);
 
     check_int("la cabecera sobrevivio al cifrado, bytes",
-              cif.u_dmem.storage[W_BUF], n_bytes);
+              cif.u_mem_sys.u_mem.storage[W_BUF], n_bytes);
     check_int("y la cantidad de bloques",
-              cif.u_dmem.storage[W_BUF + 1], n_bloques);
+              cif.u_mem_sys.u_mem.storage[W_BUF + 1], n_bloques);
 
     malos = 0;
     for (i = 0; i < n_palabras; i = i + 1)
-      if (cif.u_dmem.storage[W_BUF + 2 + i] === original[W_BUF + 2 + i])
+      if (cif.u_mem_sys.u_mem.storage[W_BUF + 2 + i] === original[W_BUF + 2 + i])
         malos = malos + 1;
     check_int("ninguna palabra quedo en claro", malos, 0);
 
     // Lo que probar_flujo.py descifra con el modelo de referencia
-    $writememh("cifrado_libre.hex", cif.u_dmem.storage);
+    $writememh("cifrado_libre.hex", cif.u_mem_sys.u_mem.storage);
 
     // Con +SOLO_CIFRAR la corrida termina aqui: el segundo procesador no
     // arranca y el criptograma lo verifica probar_flujo.py por su cuenta.
@@ -273,7 +290,7 @@ module tb_cifrado;
       rst_n = 1'b0;
       @(negedge clk);
       for (i = 0; i < N_WORDS; i = i + 1)
-        des.u_dmem.storage[i] = cif.u_dmem.storage[i];
+        des.u_mem_sys.u_mem.storage[i] = cif.u_mem_sys.u_mem.storage[i];
 
       // ----------------------------------------------------------------------
       $display("");
@@ -291,6 +308,21 @@ module tb_cifrado;
       repeat (8) @(posedge clk);
       #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(cif.mem_drenada && des.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
       $display("  (se detuvo tras %0d ciclos)", c);
 
       check1("el procesador que descifra se detuvo", halt_d, 1'b1);
@@ -305,10 +337,10 @@ module tb_cifrado;
 
       malos = 0;
       for (i = 0; i < 2 + n_palabras; i = i + 1)
-        if (des.u_dmem.storage[W_BUF + i] !== original[W_BUF + i]) begin
+        if (des.u_mem_sys.u_mem.storage[W_BUF + i] !== original[W_BUF + i]) begin
           if (malos < 4)
             $display("  palabra %0d: %08h, esperado %08h", i,
-                     des.u_dmem.storage[W_BUF + i], original[W_BUF + i]);
+                     des.u_mem_sys.u_mem.storage[W_BUF + i], original[W_BUF + i]);
           malos = malos + 1;
         end
       check_int("cabecera y datos iguales al original", malos, 0);
@@ -334,8 +366,8 @@ module tb_cifrado;
     malos = 0;
     for (i = 0; i < N_WORDS; i = i + 1) begin
       if (!(i >= W_BUF + 2 && i < W_BUF + 2 + n_palabras)) begin
-        if (es_subllave(cif.u_dmem.storage[i])) malos = malos + 1;
-        if (es_subllave(des.u_dmem.storage[i])) malos = malos + 1;
+        if (es_subllave(cif.u_mem_sys.u_mem.storage[i])) malos = malos + 1;
+        if (es_subllave(des.u_mem_sys.u_mem.storage[i])) malos = malos + 1;
       end
     end
     check_int("ninguna subllave aparece en los 64 KB de datos", malos, 0);

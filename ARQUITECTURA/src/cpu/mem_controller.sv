@@ -86,19 +86,33 @@ module mem_controller (
     input  logic                     ev_valido,
     input  logic [`MEM_LIDX_W-1:0]   ev_linea,
     input  logic [`LINE_W-1:0]       ev_datos,
-    input  logic [`LINE_WORDS-1:0]   ev_mascara,
+    input  logic [`LINE_MASK_W-1:0]   ev_mascara,
     input  logic                     ev_conflicto, // RAW con req_linea
     output logic                     ev_ack,
 
     // ---- Memoria principal ----------------------------------------------------
     output logic [`XLEN-1:0]         mem_addr,     // direccion de palabra
     output logic                     mem_we,
+    output logic [3:0]               mem_be,       // bytes de la palabra
     output logic [`XLEN-1:0]         mem_wdata,
     input  logic [`XLEN-1:0]         mem_rdata,
 
     // ---- Observacion, para contadores y testbenches --------------------------
     output logic                     inicia_lectura,  // pulso al empezar
-    output logic                     inicia_drenado   // pulso al empezar
+    output logic                     inicia_drenado,  // pulso al empezar
+
+    // La entrada de la cabeza del buffer esta siendo escrita AHORA MISMO.
+    //
+    // Al arrancar un drenado, este controlador se queda con una COPIA de la
+    // linea y de su mascara, y escribe desde esa copia durante los 53 ciclos
+    // que dura la transaccion. Si en ese lapso alguien fusionara datos nuevos
+    // sobre la entrada original, la copia no se enteraria y esos datos se
+    // perderian al confirmarse el drenado, sin ninguna senal de error.
+    //
+    // El buffer usa esta senal para excluir a la cabeza de la fusion mientras
+    // dure la escritura, de modo que un deposito a esa linea ocupe una entrada
+    // nueva y llegue a memoria despues.
+    output logic                     drenando
 );
 
   // ---------------------------------------------------------------------------
@@ -124,7 +138,7 @@ module mem_controller (
   // La linea en curso y su direccion base
   logic [`MEM_LIDX_W-1:0] linea_actual;
   logic [`LINE_W-1:0]     buffer_linea;
-  logic [`LINE_WORDS-1:0] mascara_actual;
+  logic [`LINE_MASK_W-1:0] mascara_actual;
 
   // ---------------------------------------------------------------------------
   // Direccion hacia la memoria
@@ -137,10 +151,14 @@ module mem_controller (
   assign mem_addr  = {{(`XLEN - `MEM_LIDX_W - 3){1'b0}}, linea_actual, idx[2:0]};
   assign mem_wdata = buffer_linea[idx[2:0]*`XLEN +: `XLEN];
 
-  // Solo se escribe en las fases de escritura, y solo las palabras que la
-  // mascara marca como sucias. Una palabra no marcada no se toca: la memoria ya
-  // tiene el valor bueno y reescribirlo con lo que haya en el buffer seria
-  // perder datos que nadie modifico.
+  // Solo se escribe en las fases de escritura, y solo los BYTES que la mascara
+  // marca como sucios. Un byte no marcado no se toca: la memoria ya tiene el
+  // valor bueno y reescribirlo con lo que haya en el buffer seria perder datos
+  // que nadie modifico.
+  //
+  // La habilitacion sale de los cuatro bits de mascara que corresponden a la
+  // palabra que el burst esta moviendo, y mem_we se enciende si alguno de los
+  // cuatro lo esta: una palabra sin ningun byte sucio no genera escritura.
   //
   // WR_LAT tambien escribe, y es a proposito. La palabra 0 de una lectura sale
   // gratis porque el arreglo la tiene lista en su salida durante toda la
@@ -153,10 +171,23 @@ module mem_controller (
   // memoria la escribe una vez por cada flanco que ocurra ahi. Son escrituras
   // identicas y sin efecto a partir de la primera; lo que importa es que al
   // terminar la latencia la palabra 0 ya esta puesta, igual que en la lectura.
-  assign mem_we = ((estado == WR_LAT) || (estado == WR_BURST)) &&
-                  mascara_actual[idx[2:0]];
+  assign mem_be = ((estado == WR_LAT) || (estado == WR_BURST))
+                      ? mascara_actual[idx[2:0]*4 +: 4]
+                      : 4'b0000;
 
-  assign ocupado = (estado != LIBRE);
+  assign mem_we = |mem_be;
+
+  assign ocupado  = (estado != LIBRE);
+
+  // Incluye el ciclo en que el drenado ARRANCA, no solo los que dura.
+  //
+  // Es un ciclo facil de pasar por alto y cuesta caro: la copia de la linea se
+  // toma en el mismo flanco en que la maquina sale de LIBRE, asi que durante
+  // ese ciclo el estado todavia dice LIBRE mientras la entrada ya esta
+  // condenada. Una fusion ahi modifica la entrada despues de que la copia se
+  // llevo el valor viejo, y esos bytes no llegan nunca a memoria.
+  assign drenando = ((estado == LIBRE) && puede_drenar) ||
+                    (estado == WR_LAT) || (estado == WR_BURST);
 
   // ---------------------------------------------------------------------------
   // Que transaccion empieza

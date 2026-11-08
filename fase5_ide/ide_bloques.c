@@ -23,6 +23,7 @@
 #include "semantic.h"
 #include "symtab.h"
 #include "tac.h"
+#include "vivacidad.h"
 
 /* Texto de una instruccion, con el mismo formateador que usa --ir. */
 static char *texto_instruccion(const TACInst *i) {
@@ -45,9 +46,37 @@ static char *texto_instruccion(const TACInst *i) {
     return buf;
 }
 
-static void emitir_bloque(JsonW *j, const Bloque *b, int es_entrada) {
+/* Los nombres de un conjunto del analisis, como arreglo de cadenas. */
+static void emitir_conjunto(JsonW *j, const char *clave,
+                            const VivacidadFuncion *vf, const unsigned *c) {
+    int n;
+    jw_clave_arr(j, clave);
+    if (vf != NULL && c != NULL)
+        for (n = 0; n < vf->n_nombres; n++)
+            if ((c[n / 32] >> (n % 32)) & 1u)
+                jw_item_cadena(j, vf->nombres[n]);
+    jw_arr_cerrar(j);
+}
+
+/*
+ * Un bloque, con lo que el analisis de vivacidad encontro en el.
+ *
+ * El grafo que se manda es el del codigo SIN optimizar, con las instrucciones
+ * sobrantes marcadas. Asi el editor muestra el codigo muerto en su sitio -- se
+ * ve por que sobra -- en vez de un programa del que ya desaparecio.
+ */
+static void emitir_bloque(JsonW *j, const Bloque *b, int es_entrada,
+                          const VivacidadFuncion *vf, int idx_bloque,
+                          int *n_sobran) {
     const TACInst *i;
-    int k;
+    unsigned char *marca = NULL;
+    int k, p = 0;
+
+    if (vf != NULL && b->n_inst > 0) {
+        marca = calloc((size_t)b->n_inst, 1);
+        if (marca != NULL)
+            viv_muertas_en_bloque(vf, idx_bloque, marca, b->n_inst, NULL);
+    }
 
     jw_obj_abrir(j);
     jw_entero(j, "id", b->id);
@@ -68,20 +97,37 @@ static void emitir_bloque(JsonW *j, const Bloque *b, int es_entrada) {
     for (k = 0; k < b->n_pred; k++) jw_item_entero(j, b->predecesores[k]);
     jw_arr_cerrar(j);
 
+    if (vf != NULL) {
+        int w = vf->n_palabras;
+        emitir_conjunto(j, "uso",      vf, &vf->uso[(size_t)idx_bloque * w]);
+        emitir_conjunto(j, "def",      vf, &vf->def[(size_t)idx_bloque * w]);
+        emitir_conjunto(j, "vivo_ent", vf, &vf->vivo_ent[(size_t)idx_bloque * w]);
+        emitir_conjunto(j, "vivo_sal", vf, &vf->vivo_sal[(size_t)idx_bloque * w]);
+    }
+
     jw_clave_arr(j, "codigo");
     for (i = b->primera; i != NULL; i = i->next) {
         char *t = texto_instruccion(i);
+        int m = (marca != NULL && p < b->n_inst) ? marca[p] : 0;
         jw_obj_abrir(j);
         jw_cadena(j, "texto", t != NULL ? t : "");
         jw_entero(j, "linea", i->linea);
         jw_entero(j, "columna", i->columna);
+        /*
+         * 0 se queda, 1 la quita -O1, 2 la llamada se queda pero su resultado
+         * no se usa. La interfaz las pinta distinto.
+         */
+        jw_entero(j, "muerta", m);
         jw_obj_cerrar(j);
+        if (m == VIV_SOBRA && n_sobran != NULL) (*n_sobran)++;
         free(t);
+        p++;
         if (i == b->ultima) break;
     }
     jw_arr_cerrar(j);
 
     jw_obj_cerrar(j);
+    free(marca);
 }
 
 int ide_bloques(const char *ruta, JsonW *j) {
@@ -89,8 +135,10 @@ int ide_bloques(const char *ruta, JsonW *j) {
     SymbolTable *tabla = NULL;
     TACList *tac = NULL;
     GrafoFlujo *g = NULL;
+    Vivacidad *viv = NULL;
     int f, k;
     int ok = 0;
+    int sobran = 0;
 
     diag_limpiar_captura();
     diag_capturar(1);
@@ -101,6 +149,7 @@ int ide_bloques(const char *ruta, JsonW *j) {
         semantic_analyze(ast, &tabla) && tabla != NULL) {
         tac = tac_generate_from_ast(ast, tabla);
         g = cfg_construir(tac);
+        if (g != NULL) viv = viv_analizar(g, tac);
         ok = (g != NULL);
     }
     diag_capturar(0);
@@ -128,14 +177,20 @@ int ide_bloques(const char *ruta, JsonW *j) {
         jw_clave_arr(j, "funciones");
         for (f = 0; f < g->n_funciones; f++) {
             const GrafoFuncion *fn = &g->funciones[f];
+            const VivacidadFuncion *vf =
+                (viv != NULL && f < viv->n_funciones) ? &viv->funciones[f] : NULL;
             jw_obj_abrir(j);
             jw_cadena(j, "nombre", fn->nombre);
             jw_entero(j, "bloques", fn->n_bloques);
             jw_entero(j, "aristas", fn->n_aristas);
             jw_entero(j, "inalcanzables", fn->n_inalcanzables);
+            if (vf != NULL) {
+                jw_entero(j, "nombres_analizados", vf->n_nombres);
+                jw_entero(j, "iteraciones", vf->iteraciones);
+            }
             jw_clave_arr(j, "lista");
             for (k = 0; k < fn->n_bloques; k++)
-                emitir_bloque(j, &fn->bloques[k], k == 0);
+                emitir_bloque(j, &fn->bloques[k], k == 0, vf, k, &sobran);
             jw_arr_cerrar(j);
             jw_obj_cerrar(j);
 
@@ -150,10 +205,13 @@ int ide_bloques(const char *ruta, JsonW *j) {
         jw_entero(j, "bloques", tb);
         jw_entero(j, "aristas", ta);
         jw_entero(j, "inalcanzables", ti);
+        /* Cuantas instrucciones de tres direcciones quitaria -O1. */
+        jw_entero(j, "sobran", sobran);
         jw_obj_cerrar(j);
         jw_obj_cerrar(j);
     }
 
+    viv_liberar(viv);
     cfg_liberar(g);
     tac_free(tac);
     symtab_destroy(tabla);

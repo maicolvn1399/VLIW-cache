@@ -693,6 +693,21 @@ function detalleBloque(fn) {
     return;
   }
   const lista = (v) => v.length ? v.map((x) => "B" + x).join(", ") : "ninguno";
+  /*
+   * Los cuatro conjuntos del analisis de vivacidad. Se muestran siempre, aunque
+   * esten vacios: un VIVO_SAL vacio es informacion -- quiere decir que de ese
+   * bloque no sale vivo ningun valor -- y esconderlo haria pensar que el
+   * analisis no corrio.
+   */
+  const nombres = (v) => (v && v.length) ? v.map(escapar).join(", ") : "∅";
+  const conjuntos = b.vivo_ent === undefined ? "" : `
+    <table class="conjuntos">
+      <tr><th>USO</th><td>${nombres(b.uso)}</td></tr>
+      <tr><th>DEF</th><td>${nombres(b.def)}</td></tr>
+      <tr class="sep"><th>VIVO_ENT</th><td>${nombres(b.vivo_ent)}</td></tr>
+      <tr><th>VIVO_SAL</th><td>${nombres(b.vivo_sal)}</td></tr>
+    </table>`;
+
   caja.innerHTML = `
     <h4>B${b.id}${b.etiqueta ? " (" + escapar(b.etiqueta) + ")" : ""}</h4>
     <div class="meta">
@@ -704,9 +719,18 @@ function detalleBloque(fn) {
       <span>predecesores: ${lista(b.predecesores)}</span>
       <span>sucesores: ${lista(b.sucesores)}</span>
     </div>
-    <pre>${b.codigo.map((c) =>
-      (c.linea > 0 ? `<b data-l="${c.linea}" data-c="${c.columna}">${String(c.linea).padStart(3)}</b>  `
-                   : "  ·  ") + escapar(c.texto)).join("\n")}</pre>`;
+    ${conjuntos}
+    <pre>${b.codigo.map((c) => {
+      const clase = c.muerta === 1 ? ' class="tac-muerta"'
+                  : c.muerta === 2 ? ' class="tac-sinuso"' : "";
+      return `<span${clase}>` +
+        (c.linea > 0 ? `<b data-l="${c.linea}" data-c="${c.columna}">${String(c.linea).padStart(3)}</b>  `
+                     : "  ·  ") + escapar(c.texto) + "</span>";
+    }).join("\n")}</pre>
+    ${b.codigo.some((c) => c.muerta)
+      ? '<div class="nota-muerta">Lo tachado es lo que elimina <code>-O1</code>: '
+        + 'el analisis de vivacidad dice que ese valor no se vuelve a leer.</div>'
+      : ""}`;
   caja.querySelectorAll("b[data-l]").forEach((e) => {
     e.onclick = () => irA(+e.dataset.l, +e.dataset.c || 1);
   });
@@ -761,6 +785,8 @@ function mostrarFlujo() {
   datos.innerHTML =
     `<span>${fn.bloques} bloques</span><span>${fn.aristas} aristas</span>` +
     (fn.inalcanzables ? `<span class="alerta">${fn.inalcanzables} inalcanzable${fn.inalcanzables === 1 ? "" : "s"}</span>` : "") +
+    (fn.iteraciones ? `<span>vivacidad: ${fn.nombres_analizados} nombres, punto fijo en ${fn.iteraciones} pasada${fn.iteraciones === 1 ? "" : "s"}</span>` : "") +
+    (r.resumen.sobran ? `<span class="alerta">-O1 quitaria ${r.resumen.sobran} instrucciones</span>` : "") +
     `<span>total: ${r.resumen.bloques} bloques en ${r.resumen.funciones} funciones</span>`;
 
   dibujarGrafo(fn);
@@ -1198,18 +1224,20 @@ async function guardar() {
 
 async function compilar() {
   const modo = $("modo-compilar").value;
+  const optimizar = $("opt-o1").checked;
   estado("compilando...", "trabajando");
   verPanel("salida");
 
   const r = await pedir("compilar", {
-    nombre: App.actual, contenido: codigo.value, modo,
+    nombre: App.actual, contenido: codigo.value, modo, optimizar,
   });
 
   const caja = $("salida-texto");
   if (r.error) { caja.textContent = r.error; estado("fallo", "mal"); return; }
 
   const bien = r.codigo_salida === 0;
-  let cabecera = `$ novac ${modo === "binario" ? "" : "[" + modo + "] "}${App.actual}\n`;
+  let cabecera = `$ novac ${optimizar ? "-O1 " : ""}` +
+                 `${modo === "binario" ? "" : "[" + modo + "] "}${App.actual}\n`;
   cabecera += `codigo de salida: ${r.codigo_salida}  `;
   cabecera += `tiempo de compilacion: ${r.milisegundos} ms`;
   if (r.bytes_generados) cabecera += `  binario: ${r.bytes_generados} bytes`;

@@ -73,12 +73,17 @@ module tb_fetch_flow;
   // Valor de R3 para el JR, sin multiplexar: el programa solo lee R3
   localparam logic [`XLEN-1:0] R3_VAL = 32'h0000_00A7;
 
+  // Congelamiento (Iteracion 3). Estas pruebas no lo ejercitan: lo deja en
+  // cero para que el flujo se comporte como antes.
+  logic imem_stall = 1'b0;
+
   fetch u_fetch (
       .clk    (clk),
       .rst_n  (rst_n),
       .taken  (taken),
       .target (target),
       .halt   (halt),
+      .stall  (imem_stall),
       .pc     (fetch_pc),
       .valid  (fetch_valid),
       .halted (halted)
@@ -86,6 +91,7 @@ module tb_fetch_flow;
 
   imem #(.NUM_BUNDLES(64)) u_imem (
       .clk    (clk),
+      .stall  (imem_stall),
       .addr   (fetch_pc),
       .bundle (bundle)
   );
@@ -93,6 +99,7 @@ module tb_fetch_flow;
   reg_if_id u_if_id (
       .clk       (clk),
       .rst_n     (rst_n),
+      .stall     (imem_stall),
       .valid_in  (fetch_valid),
       .pc_in     (fetch_pc),
       .valid_out (id_valid),

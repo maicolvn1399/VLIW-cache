@@ -44,12 +44,16 @@ module tb_fetch;
   logic             valid;
   logic             halted;
 
+  // Congelamiento por la jerarquia de memoria (Iteracion 3)
+  logic stall;
+
   fetch dut (
       .clk    (clk),
       .rst_n  (rst_n),
       .taken  (taken),
       .target (target),
       .halt   (halt),
+      .stall  (stall),
       .pc     (pc),
       .valid  (valid),
       .halted (halted)
@@ -66,6 +70,7 @@ module tb_fetch;
       .taken  (taken),
       .target (target),
       .halt   (halt),
+      .stall  (stall),
       .pc     (pc_alt),
       .valid  (valid_alt),
       .halted (halted_alt)
@@ -138,6 +143,7 @@ module tb_fetch;
 
   task automatic reiniciar();
     begin
+      stall = 1'b0;
       rst_n = 1'b0;
       avanzar();
       rst_n = 1'b1;
@@ -267,6 +273,69 @@ module tb_fetch;
     avanzar();
     check32("y avanza desde ahi", pc_alt, 32'h0000_7010);
     check1 ("sin detenerse", halted_alt, 1'b0);
+
+    // ------------------------------------------------------------------------
+    $display("[11] el stall congela el PC");
+    // ------------------------------------------------------------------------
+    // Un fallo de cache detiene el bundle que esta en vuelo. Si el PC siguiera
+    // avanzando durante esa espera, al reanudar se habrian saltado tantos
+    // bundles como ciclos durara el fallo, y el programa ejecutaria otra cosa.
+
+    reiniciar();
+    avanzar();
+    avanzar();
+    check32("el PC avanzo dos bundles", pc, 32'h0000_0020);
+
+    stall = 1'b1;
+    repeat (10) avanzar();
+    check32("y no se movio en 10 ciclos de stall", pc, 32'h0000_0020);
+    check1 ("sin darse por detenido", halted, 1'b0);
+
+    stall = 1'b0;
+    avanzar();
+    check32("al levantarse, sigue donde estaba", pc, 32'h0000_0030);
+
+    // ------------------------------------------------------------------------
+    $display("[12] un salto durante un stall no se pierde");
+    // ------------------------------------------------------------------------
+    // La BRU resuelve en ID y el salto llega mientras el pipeline espera. Como
+    // el bundle del salto no avanza, su destino tiene que seguir en pie cuando
+    // el stall se levanta: si el PC lo tomara durante la espera, saltaria
+    // adelantandose al bundle que todavia no termino.
+
+    stall = 1'b1;
+    paso(1'b1, 32'h0000_0800, 1'b0);   // salto tomado, con stall encendido
+    check32("el salto no se aplica durante el stall", pc, 32'h0000_0030);
+
+    stall = 1'b0;
+    paso(1'b1, 32'h0000_0800, 1'b0);   // el mismo salto, ya sin stall
+    check32("y se aplica al levantarse", pc, 32'h0000_0800);
+
+    // ------------------------------------------------------------------------
+    $display("[13] el HALT espera al stall, y el reset gana siempre");
+    // ------------------------------------------------------------------------
+    // Un HALT que llega durante un stall pertenece a un bundle que todavia no
+    // termino de ejecutarse. Registrarlo ya mismo daria por terminado el
+    // programa con un acceso a memoria en vuelo.
+
+    reiniciar();
+    stall = 1'b1;
+    paso(1'b0, 32'd0, 1'b1);           // HALT con stall encendido
+    check1 ("el HALT no se registra durante el stall", halted, 1'b0);
+
+    stall = 1'b0;
+    paso(1'b0, 32'd0, 1'b1);
+    check1 ("y se registra al levantarse", halted, 1'b1);
+
+    // El reset manda sobre todo, stall incluido
+    reiniciar();
+    avanzar();
+    stall = 1'b1;
+    rst_n = 1'b0;
+    avanzar();
+    rst_n = 1'b1;
+    check32("el reset gana sobre el stall", pc, 32'h0000_0000);
+    stall = 1'b0;
 
 `ifdef FORCE_FAIL
     // ------------------------------------------------------------------------

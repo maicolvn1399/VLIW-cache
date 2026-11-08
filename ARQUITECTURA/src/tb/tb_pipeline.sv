@@ -82,7 +82,12 @@ module tb_pipeline;
   logic             valid_id;
   logic [`XLEN-1:0] pc_id;
 
+  // Congelamiento (Iteracion 3). Esta prueba mide la latencia expuesta con el
+  // pipeline corriendo libre, asi que lo deja en cero.
+  logic sin_stall = 1'b0;
+
   reg_if_id u_if_id (
+      .stall        (sin_stall),
       .clk       (clk),
       .rst_n     (rst_n),
       .valid_in  (valid_if),
@@ -135,6 +140,7 @@ module tb_pipeline;
   logic [2:0]                         s4_cause_ex;
 
   reg_id_ex u_id_ex (
+      .stall        (sin_stall),
       .clk          (clk),
       .rst_n        (rst_n),
       .valid_in     (valid_id),

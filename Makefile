@@ -24,7 +24,9 @@ SRCS = main.c \
        $(SEM_DIR)/semantic.c \
        $(GEN_DIR)/tac.c \
        $(GEN_DIR)/codegen.c \
-       $(OPT_DIR)/bloques.c
+       $(OPT_DIR)/bloques.c \
+       $(OPT_DIR)/vivacidad.c \
+       $(OPT_DIR)/muerto.c
 
 OBJS = $(SRCS:.c=.o)
 
@@ -47,7 +49,7 @@ IDE_SRCS = $(IDE_DIR)/novaide.c \
 IDE_OBJS = $(IDE_SRCS:.c=.o)
 DEPS = $(OBJS:.o=.d) $(IDE_OBJS:.o=.d)
 
-.PHONY: all ide prueba-ide bloques prueba test tabla arbol ensamblador binario paquetes ocupacion entregables generar generar-prueba ejecutar-prueba ejecutar-prueba-rtl prueba-rtl prueba-rtl-simple prueba-rtl-integracion prueba-rtl-objeto prueba-rtl-matriz prueba-rtl-matriz-1000 prueba-rtl-transpuesta prueba-rtl-producto-punto prueba-rtl-multiplicacion prueba-rtl-busqueda prueba-rtl-factorial prueba-rtl-propuesto prueba-rtl-crypto prueba-rtl-cifrado prueba-rtl-descifrado depurar verificar clean limpiar
+.PHONY: all ide prueba-ide bloques vivacidad prueba prueba-rtl-optimizado metricas test tabla arbol ensamblador binario paquetes ocupacion entregables generar generar-prueba ejecutar-prueba ejecutar-prueba-rtl prueba-rtl prueba-rtl-simple prueba-rtl-integracion prueba-rtl-objeto prueba-rtl-matriz prueba-rtl-matriz-1000 prueba-rtl-transpuesta prueba-rtl-producto-punto prueba-rtl-multiplicacion prueba-rtl-busqueda prueba-rtl-factorial prueba-rtl-propuesto prueba-rtl-crypto prueba-rtl-cifrado prueba-rtl-descifrado depurar verificar clean limpiar
 
 all: $(BIN) $(IDE_BIN)
 
@@ -93,6 +95,20 @@ NVX := $(SALIDA)/$(NOMBRE_F).nvx
 
 tabla: $(BIN)
 	./$(BIN) --sym "$(F)"
+
+# Fase 6. 'make vivacidad F=archivo.nv' muestra los conjuntos del analisis;
+# 'make metricas F=archivo.nv' pone lado a lado lo que cuesta optimizar y lo
+# que se gana, que es el intercambio que hay que poder explicar.
+vivacidad: $(BIN)
+	./$(BIN) --vivacidad "$(F)"
+
+metricas: $(BIN)
+	@mkdir -p "$(SALIDA)"
+	@echo "=============== SIN OPTIMIZAR ==============="
+	@./$(BIN) --metricas "$(F)" -o "$(SALIDA)/$(NOMBRE_F).O0.nvx"
+	@echo
+	@echo "=============== CON -O1 ====================="
+	@./$(BIN) --metricas -O1 "$(F)" -o "$(SALIDA)/$(NOMBRE_F).O1.nvx"
 
 arbol: $(BIN) tools/arbol_svg.py
 	@mkdir -p "$(SALIDA)"
@@ -179,7 +195,19 @@ ejecutar-prueba ejecutar-prueba-rtl: $(BIN) $(RTL_TB) $(RTL_SRCS) ARQUITECTURA/t
 		"$(CERBERO_CPU)"/*.sv "$(RTL_TB)"
 	vvp -n .prueba_rtl.vvp "+EXPECTED=$(RESULTADO_ESPERADO)"
 
+# Banderas con las que run_rtl_test.sh invoca al compilador. Vacias por
+# omision; 'make prueba-rtl OPT=-O1' corre la misma bateria con la fase 6
+# encendida. Se exporta porque el script la lee del entorno.
+OPT ?=
+export OPT
+
 prueba-rtl: prueba-rtl-simple prueba-rtl-integracion prueba-rtl-objeto prueba-rtl-factorial prueba-rtl-busqueda prueba-rtl-propuesto prueba-rtl-matriz prueba-rtl-matriz-1000 prueba-rtl-transpuesta prueba-rtl-producto-punto prueba-rtl-multiplicacion prueba-rtl-crypto
+
+# La prueba de que optimizar no cambia el programa: la misma bateria, los
+# mismos valores de retorno esperados, compilando con -O1. Si una sola cambia
+# de resultado, la fase 6 esta rota.
+prueba-rtl-optimizado:
+	$(MAKE) prueba-rtl OPT=-O1
 
 prueba-rtl-simple: $(BIN) $(RTL_TB) $(RTL_SRCS)
 	sh test/run_rtl_test.sh ./$(BIN) test/ejecucion/suma_10_15.nv 25 "$(CERBERO_CPU)"

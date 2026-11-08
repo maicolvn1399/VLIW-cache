@@ -59,6 +59,26 @@ typedef struct {
 /* Deja en *out la tabla y devuelve cuantas entradas tiene. */
 int codegen_etiquetas(const CodegenEtiqueta **out);
 
+/*
+ * Tamano y densidad del programa que acaba de armarse.
+ *
+ * Son las metricas estaticas que predicen el tiempo de ejecucion: cada bundle
+ * es un ciclo de emision, y la ocupacion (slots con trabajo entre slots
+ * totales) dice si el VLIW se esta usando como VLIW o como un procesador
+ * escalar caro. Los numeros de verdad los dan los contadores del procesador al
+ * correr el binario; estos se pueden mirar sin simular.
+ *
+ * Se capturan junto con la tabla de etiquetas, antes de liberar las
+ * estructuras del generador. Devuelve 0 si todavia no se ha generado nada.
+ */
+typedef struct {
+    int bundles;         /* bundles emitidos (16 bytes cada uno) */
+    int slots_usados;    /* slots con una operacion de verdad */
+    int bundles_vacios;  /* bundles sin ninguna operacion */
+} CodegenEstadisticas;
+
+int codegen_estadisticas(CodegenEstadisticas *out);
+
 /* Muestra cada bundle con su dirección, slots de ensamblador y bytes emitidos. */
 bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out);
 

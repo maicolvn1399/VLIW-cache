@@ -203,6 +203,8 @@ module tb_logout;
 
   integer i, c, malos;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_logout.vcd");
@@ -225,6 +227,18 @@ module tb_logout;
       c = c + 1;
     end
     $display("  (el programa corrio %0d ciclos)", c);
+
+    // Y espera a que la jerarquia de memoria termine de escribir. Desde la
+    // Iteracion 3 un store pasa por la cache y por dos buffers antes de llegar
+    // a memoria principal, asi que revisarla apenas el programa se detiene
+    // daria por perdidos stores que seguian en camino. Son ciclos del ARNES.
+    guarda_drenado = 0;
+    while (!(dut.mem_drenada) && guarda_drenado < 200000) begin
+      @(posedge clk);
+      guarda_drenado = guarda_drenado + 1;
+    end
+    #1;
+
     $display("");
 
     check("el programa llego a HALT y no se colgo", halted);
@@ -243,7 +257,7 @@ module tb_logout;
     check("el PC estaba DENTRO de [0x7000, 0x7FFF] al abrirla",
           (pc_sube >= SEC_BASE) && (pc_sube <= SEC_LIMIT));
     check32("foto 1: AUTH = 1 estando dentro",
-            dut.u_dmem.storage[W_FOTOS + 0], 32'h0000_0010);
+            dut.u_mem_sys.u_mem.storage[W_FOTOS + 0], 32'h0000_0010);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -260,7 +274,7 @@ module tb_logout;
     check("y se cerro despues de haberse abierto, no antes",
           ciclo_baja > ciclo_sube);
     check32("foto 2: AUTH = 0 ya afuera, sin haber ejecutado LOGOUT",
-            dut.u_dmem.storage[W_FOTOS + 1], 32'h0000_0000);
+            dut.u_mem_sys.u_mem.storage[W_FOTOS + 1], 32'h0000_0000);
     check("AUTH sigue en cero al terminar", psw[`PSW_AUTH] === 1'b0);
 
     // ------------------------------------------------------------------------
@@ -271,7 +285,7 @@ module tb_logout;
     // es que una operacion privilegiada intentada despues se ANULA.
 
     check32("foto 3: la ronda de afuera se anulo con DENIED",
-            dut.u_dmem.storage[W_FOTOS + 2], 32'h0000_0240);
+            dut.u_mem_sys.u_mem.storage[W_FOTOS + 2], 32'h0000_0240);
     check("el PSW final trae EXC encendido", psw[`PSW_EXC] === 1'b1);
     check_int("y la causa registrada es DENIED",
               psw[`PSW_CAUSE], `CAUSE_DENIED);
@@ -283,8 +297,8 @@ module tb_logout;
 
     malos = 0;
     for (i = 0; i < N_WORDS; i = i + 1)
-      if (dut.u_dmem.storage[i] === K0 || dut.u_dmem.storage[i] === K1 ||
-          dut.u_dmem.storage[i] === K2 || dut.u_dmem.storage[i] === K3)
+      if (dut.u_mem_sys.u_mem.storage[i] === K0 || dut.u_mem_sys.u_mem.storage[i] === K1 ||
+          dut.u_mem_sys.u_mem.storage[i] === K2 || dut.u_mem_sys.u_mem.storage[i] === K3)
         malos = malos + 1;
     check_int("ninguna subllave aparece en los 64 KB de datos", malos, 0);
 

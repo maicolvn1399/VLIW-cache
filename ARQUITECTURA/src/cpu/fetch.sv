@@ -79,6 +79,12 @@ module fetch #(
     input  logic [`XLEN-1:0] target,
     input  logic             halt,
 
+    // Congelamiento por la jerarquia de memoria (enunciado 3.3). Mientras este
+    // encendido el PC no avanza, de modo que el bundle que esta en vuelo no es
+    // reemplazado por el siguiente.
+    input  logic             stall,
+
+
     // ---- Hacia imem.sv y reg_if_id.sv --------------------------------------
     output logic [`XLEN-1:0] pc,
     output logic             valid,      // el bundle que se busca es de verdad
@@ -97,10 +103,19 @@ module fetch #(
 
   assign pc_next = taken ? (target & ALIGN_MASK) : (pc + BUNDLE_BYTES);
 
+  // El stall congela el PC sin tocar nada mas. No es lo mismo que halt: halt es
+  // definitivo y enciende 'halted', mientras que un stall es una pausa de la
+  // que se sale sola. Por eso se mira antes que halt pero no lo anula: si en el
+  // mismo ciclo llegaran los dos, el bundle que trae el HALT todavia no termino
+  // de ejecutarse, asi que primero espera y el HALT se registra cuando el stall
+  // se levante.
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       pc     <= RESET_PC;
       halted <= 1'b0;
+    end else if (stall) begin
+      pc     <= pc;
+      halted <= halted;
     end else if (!halted) begin
       pc     <= halt ? pc : pc_next;
       halted <= halt;

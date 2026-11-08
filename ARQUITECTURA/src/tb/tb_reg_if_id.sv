@@ -36,9 +36,13 @@ module tb_reg_if_id;
   logic             valid_out;
   logic [`XLEN-1:0] pc_out;
 
+  // Congelamiento por la jerarquia de memoria (Iteracion 3)
+  logic stall;
+
   reg_if_id dut (
       .clk       (clk),
       .rst_n     (rst_n),
+      .stall     (stall),
       .valid_in  (valid_in),
       .pc_in     (pc_in),
       .valid_out (valid_out),
@@ -108,6 +112,7 @@ module tb_reg_if_id;
 
   task automatic reiniciar();
     begin
+      stall = 1'b0;
       rst_n = 1'b0;
       @(posedge clk);
       #1 rst_n = 1'b1;
@@ -227,6 +232,65 @@ module tb_reg_if_id;
     // ------------------------------------------------------------------------
     check_int("caso deliberadamente incorrecto", 0, 1);
 `endif
+
+    // ------------------------------------------------------------------------
+    $display("[stall] la frontera RETIENE, no inserta burbuja");
+    // ------------------------------------------------------------------------
+    // Un fallo de cache detiene el bundle que esta aguas abajo. Esta frontera
+    // tiene que CONSERVAR lo que lleva: el bundle que la atraveso todavia no
+    // fue consumido, y el que viene detras no puede entrar sin pisarlo.
+    //
+    // La alternativa, insertar una burbuja, es lo correcto en la frontera
+    // EX/MEM pero no aqui: alli el trabajo aguas abajo ya esta hecho y hay que
+    // dejarlo drenar; aqui todavia no se hizo nada.
+
+    reiniciar();
+    valid_in = 1'b1;
+    pc_in    = 32'h0000_4000;
+    @(negedge clk); #1;
+    @(posedge clk); #1;
+    check32("la frontera tomo el PC", pc_out, 32'h0000_4000);
+
+    // Con el stall encendido se presenta OTRO bundle: no debe entrar
+    stall    = 1'b1;
+    pc_in    = 32'h0000_5000;
+    repeat (6) begin
+      @(negedge clk); #1;
+      @(posedge clk); #1;
+    end
+    check32("retuvo el PC durante 6 ciclos", pc_out, 32'h0000_4000);
+    check1 ("y su validez",                  valid_out, 1'b1);
+
+    // Al levantarse entra el que estaba esperando
+    stall = 1'b0;
+    @(negedge clk); #1;
+    @(posedge clk); #1;
+    check32("al levantarse entra el siguiente", pc_out, 32'h0000_5000);
+
+    // Un bundle invalido retenido sigue invalido: el stall no fabrica validez
+    reiniciar();
+    valid_in = 1'b0;
+    pc_in    = 32'h0000_6000;
+    @(negedge clk); #1;
+    @(posedge clk); #1;
+    stall    = 1'b1;
+    valid_in = 1'b1;
+    repeat (3) begin
+      @(negedge clk); #1;
+      @(posedge clk); #1;
+    end
+    check1("un hueco retenido sigue siendo hueco", valid_out, 1'b0);
+    stall = 1'b0;
+
+    // El reset manda sobre el stall
+    stall = 1'b1;
+    rst_n = 1'b0;
+    @(negedge clk); #1;
+    @(posedge clk); #1;
+    check32("el reset gana sobre el stall", pc_out, 32'h0000_0000);
+    check1 ("y limpia la validez",          valid_out, 1'b0);
+    rst_n = 1'b1;
+    stall = 1'b0;
 
     resumen();
   end

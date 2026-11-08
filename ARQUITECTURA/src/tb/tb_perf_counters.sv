@@ -50,6 +50,9 @@ module tb_perf_counters;
   logic [31:0] bundles_vacios, saltos_tomados, delay_vacios, ciclos_stall;
   logic        desbordado;
 
+  // Eventos de la cache: este arnes no los usa (ver la nota en la instancia)
+  logic [6:0]  ev_l1 = 7'd0;
+
   perf_counters dut (
       .clk            (clk),
       .rst_n          (rst_n),
@@ -58,6 +61,17 @@ module tb_perf_counters;
       .id_taken       (id_taken),
       .halted         (halted),
       .stall          (stall),
+      // Los eventos de cache no los ejercita este arnes: se verifican en
+      // tb_l1_dcache.sv, donde hay una cache de verdad que los produce. Aqui
+      // van en cero para que las cuentas del procesador queden aisladas.
+      .ev_load_hit    (ev_l1[0]),
+      .ev_load_miss   (ev_l1[1]),
+      .ev_store_hit   (ev_l1[2]),
+      .ev_store_miss  (ev_l1[3]),
+      .ev_stall_miss  (ev_l1[4]),
+      .ev_stall_wb    (ev_l1[5]),
+      .ev_stall_raw   (ev_l1[6]),
+
       .ciclos         (ciclos),
       .bundles        (bundles),
       .instrucciones  (instrucciones),
@@ -68,6 +82,13 @@ module tb_perf_counters;
       .saltos_tomados (saltos_tomados),
       .delay_vacios   (delay_vacios),
       .ciclos_stall   (ciclos_stall),
+      .l1_load_hit    (),
+      .l1_load_miss   (),
+      .l1_store_hit   (),
+      .l1_store_miss  (),
+      .stall_por_miss (),
+      .stall_por_wb   (),
+      .stall_por_raw  (),
       .desbordado     (desbordado)
   );
 
@@ -90,6 +111,17 @@ module tb_perf_counters;
       .id_taken       (id_taken),
       .halted         (halted),
       .stall          (stall),
+      // Los eventos de cache no los ejercita este arnes: se verifican en
+      // tb_l1_dcache.sv, donde hay una cache de verdad que los produce. Aqui
+      // van en cero para que las cuentas del procesador queden aisladas.
+      .ev_load_hit    (ev_l1[0]),
+      .ev_load_miss   (ev_l1[1]),
+      .ev_store_hit   (ev_l1[2]),
+      .ev_store_miss  (ev_l1[3]),
+      .ev_stall_miss  (ev_l1[4]),
+      .ev_stall_wb    (ev_l1[5]),
+      .ev_stall_raw   (ev_l1[6]),
+
       .ciclos         (ciclos_chico),
       .bundles        (bundles_chico),
       .instrucciones  (instr_chico),
@@ -100,6 +132,13 @@ module tb_perf_counters;
       .saltos_tomados (saltos_chico),
       .delay_vacios   (delay_chico),
       .ciclos_stall   (stall_chico),
+      .l1_load_hit    (),
+      .l1_load_miss   (),
+      .l1_store_hit   (),
+      .l1_store_miss  (),
+      .stall_por_miss (),
+      .stall_por_wb   (),
+      .stall_por_raw  (),
       .desbordado     (desbordado_chico)
   );
 

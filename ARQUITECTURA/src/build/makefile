@@ -70,6 +70,9 @@ SUB_top := $(filter-out $(CPU)/top.sv,$(wildcard $(CPU)/*.sv))
 # cuatro piezas, asi que las arrastra consigo para compilar y para el lint.
 SUB_mem_system := $(CPU)/mem_clock_gen.sv $(CPU)/main_memory.sv \
                   $(CPU)/eviction_buffer.sv $(CPU)/mem_controller.sv
+# La cache se prueba contra el write buffer de verdad (eviction_buffer.sv), que
+# es el que top.sv le va a poner al lado, y no contra un modelo simplificado.
+SUB_l1_dcache := $(CPU)/eviction_buffer.sv
 
 # ---- Dependencias extra por unidad (agregar aqui) ---------------------------
 DEPS_crypto_unit  := $(TB)/key_vault_model.sv

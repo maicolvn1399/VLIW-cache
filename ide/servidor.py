@@ -73,10 +73,15 @@ class Nucleo:
             return {"error": f"respuesta de novaide ilegible: {e}",
                     "crudo": r.stdout[:2000]}
 
-    def compilar(self, ruta, modo):
+    def compilar(self, ruta, modo, optimizar=False):
         """
         Corre el compilador de verdad sobre el archivo. Es lo que hace el boton
         de compilar: el IDE no simula la compilacion, la ejecuta.
+
+        'optimizar' agrega -O1, que enciende la fase 6. Vale para todos los
+        modos a proposito: asi se puede mirar el mismo archivo con y sin
+        optimizar en cualquiera de las vistas -- el codigo intermedio, el
+        ensamblador, los bundles -- y comparar.
         """
         banderas = {
             "binario": [],
@@ -84,9 +89,14 @@ class Nucleo:
             "ast": ["-t"],
             "simbolos": ["--sym"],
             "ir": ["--ir"],
+            "vivacidad": ["--vivacidad"],
+            "metricas": ["--metricas"],
             "ensamblador": ["-s"],
             "paquetes": ["-p"],
         }.get(modo, [])
+
+        if optimizar:
+            banderas = banderas + ["-O1"]
 
         salida = None
         argumentos = [self.novac] + banderas + [ruta]
@@ -96,7 +106,9 @@ class Nucleo:
         # ellas, asi que pasarle -o dejaba el panel de Salida en blanco con el
         # listado de bundles escondido en un archivo. Solo lo reciben los modos
         # que de verdad producen un binario.
-        if modo in ("binario", "ensamblador"):
+        # --metricas necesita que se genere el binario para poder contar los
+        # bundles, pero su reporte sale por pantalla, asi que tambien lleva -o.
+        if modo in ("binario", "ensamblador", "metricas"):
             salida = ruta + ".nvx"
             argumentos += ["-o", salida]
 
@@ -323,7 +335,8 @@ class Manejador(http.server.SimpleHTTPRequestHandler):
     def hacer_compilar(self, p):
         nombre = p.get("nombre", "editor.nv")
         ruta = self.taller.escribir(nombre, p.get("contenido", ""))
-        return self.nucleo.compilar(ruta, p.get("modo", "binario"))
+        return self.nucleo.compilar(ruta, p.get("modo", "binario"),
+                                    bool(p.get("optimizar", False)))
 
     def hacer_guardar(self, p):
         destino = self.ruta_segura(p.get("nombre", ""))

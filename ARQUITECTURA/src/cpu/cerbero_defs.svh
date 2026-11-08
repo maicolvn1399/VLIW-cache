@@ -409,4 +409,64 @@
 `define EVICT_ENTRIES 8
 `define EVICT_IDX_W   3            // log2(EVICT_ENTRIES)
 
+// El write buffer de L1-D hacia el nivel siguiente. El enunciado lo acota entre
+// 2 y 8 entradas; se eligen 8, el maximo, porque con write-through este buffer
+// absorbe TODO el trafico de escritura del programa y es lo unico que separa un
+// store de la latencia del nivel de abajo.
+`define WB_ENTRIES 8
+
+//------------------------------------------------------------------------------
+// Granularidad de la mascara de los buffers de escritura
+//
+// Cada entrada de un buffer guarda una linea completa mas una mascara de que
+// partes de ella estan sucias. La mascara es POR BYTE, no por palabra, y eso no
+// es un lujo: el ISA tiene SB y SH.
+//
+// Con write-through y no-write-allocate, un store que falla en L1-D sale
+// directo hacia abajo sin que la linea este en la cache. Si la mascara fuera
+// por palabra, un SB que falla no tendria forma de decir "solo este byte": o se
+// escribe la palabra entera, pisando tres bytes que nadie modifico, o hay que
+// leer la linea de memoria antes de escribirla, que cuesta un T_mem completo
+// por cada store de un byte. Con mascara por byte el caso se resuelve solo.
+//------------------------------------------------------------------------------
+`define LINE_MASK_W `LINE_BYTES    // 32 bits: uno por byte de la linea
+
+//------------------------------------------------------------------------------
+// Cache L1-D  (enunciado 3.2.2)
+//
+//   4 KB, 2 vias, linea de 32 bytes  ->  128 lineas, 64 conjuntos
+//
+// El reparto de la direccion de byte, de 32 bits:
+//
+//      31                    11 10        5 4         0
+//     +------------------------+-----------+-----------+
+//     |        etiqueta        |  conjunto | desplaz.  |
+//     |        21 bits         |   6 bits  |  5 bits   |
+//     +------------------------+-----------+-----------+
+//
+// La memoria principal son 64 KB, asi que de la etiqueta solo los 5 bits bajos
+// pueden ser distintos de cero. Se guardan los 21 igual: comparar de mas no
+// cuesta correccion, y el dia que la memoria crezca no hay nada que cambiar.
+//------------------------------------------------------------------------------
+`define L1D_BYTES    4096
+`define L1D_WAYS        2
+`define L1D_SETS       64          // L1D_BYTES / LINE_BYTES / L1D_WAYS
+`define L1D_SIDX_W      6          // log2(L1D_SETS)
+`define L1D_TAG_W      21          // XLEN - L1D_SIDX_W - LINE_OFF_W
+
+`define L1D_SET   10:5             // bits de conjunto en la direccion de byte
+`define L1D_TAG   31:11            // bits de etiqueta
+
+//------------------------------------------------------------------------------
+// Hit time de cada nivel, en ciclos de procesador (enunciado 3.2.2 y 3.2.3)
+//
+// L1 se resuelve en el mismo ciclo en que se presenta la direccion, igual que
+// la dmem del Proyecto I: la salida esta registrada y el dato llega a MEM.
+//
+// L2_HIT_CYCLES todavia no se usa: no hay L2 hasta la Iteracion 4. Se define
+// aqui para que el dia que entre, el numero salga de un solo lugar.
+//------------------------------------------------------------------------------
+`define L1_HIT_CYCLES 1
+`define L2_HIT_CYCLES 8
+
 `endif // CERBERO_DEFS_SVH

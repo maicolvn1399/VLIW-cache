@@ -47,7 +47,7 @@ alimentan:
 | Banco de registros | `regfile.sv` | Los 16 registros de 32 bits (`r0` a `r15`) |
 | ALU-0 y ALU-1 | `alu.sv` | Operaciones aritméticas y lógicas |
 | LSU | `lsu.sv`, `load_align.sv` | Accesos a la memoria de datos |
-| Memoria de datos | `dmem.sv` | 64 KB para los datos del programa |
+| Memoria de datos | `dmem.sv` (fuera de uso desde la Iteración 3) | 64 KB para los datos del programa |
 | Unidad Feistel4 | `crypto_unit.sv` | Una ronda del cifrado |
 | Bóveda de llaves | `key_vault.sv` | Guarda las llaves y controla quién puede usarlas |
 | ALU corta | `short_alu.sv` | Operaciones simples en el slot S3 cuando no se cifra |
@@ -552,12 +552,13 @@ versión.
 | `key_vault.sv` | EX | Bóveda de llaves | `tb_key_vault.sv`, `tb_crypto_vault.sv` |
 | `crypto_unit.sv` | EX | Ronda Feistel4 | `tb_crypto_unit.sv` |
 | `short_alu.sv` | EX | ALU corta | `tb_short_alu.sv` |
-| `dmem.sv` | EX y MEM | Memoria de datos | `tb_dmem.sv` |
+| `dmem.sv` (fuera de uso desde la Iteración 3) | EX y MEM | Memoria de datos | `tb_dmem.sv` |
 | `reg_ex_mem.sv` | EX → MEM | Lleva escrituras, fallas y banderas | `tb_reg_ex_mem.sv` |
 | `load_align.sv` | MEM | Extrae el dato pedido de la palabra leída | `tb_lsu.sv` |
 | `psw_fault_unit.sv` | WB | PSW, detección de `WCONF`, registro de fallas | `tb_psw_fault_unit.sv`, `tb_wconf.sv` |
 | `perf_counters.sv` | ID (observa) | Contadores de rendimiento; no devuelve nada al datapath. Ver [`metricas.md`](metricas.md) | `tb_perf_counters.sv` |
-| `mem_system.sv` | (fuera del pipeline) | Memoria principal con latencia realista: reloj de 25 MHz, T_mem de 53 ciclos y eviction buffer. Todavía no conectado; ver [`memoria.md`](memoria.md) | `tb_mem_system.sv` |
+| `l1_dcache.sv` | EX→MEM | Caché de datos de 4 KB, 2 vías, write-through, no-write-allocate, LRU. Reemplaza a `dmem.sv` en el datapath; ver [`cache.md`](cache.md) | `tb_l1_dcache.sv` |
+| `mem_system.sv` | (debajo de L1-D) | Memoria principal con latencia realista: reloj de 25 MHz, T_mem de 53 ciclos y eviction buffer; ver [`memoria.md`](memoria.md) | `tb_mem_system.sv` |
 | `mem_clock_gen.sv` | | El dominio de 25 MHz y su pulso de habilitación | `tb_mem_clock_gen.sv` |
 | `main_memory.sv` | | Los 64 KB de memoria principal | `tb_mem_system.sv` |
 | `mem_controller.sv` | | La máquina de estados de la latencia y el burst | `tb_mem_system.sv` |

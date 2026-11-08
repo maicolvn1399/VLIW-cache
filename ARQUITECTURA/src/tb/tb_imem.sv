@@ -65,11 +65,16 @@ module tb_imem;
   logic [`XLEN-1:0]     addr;
   logic [`BUNDLE_W-1:0] bundle;
 
+  // Congelamiento (Iteracion 3). Estas pruebas no lo ejercitan: lo deja en
+  // cero para que la memoria se comporte como antes.
+  logic imem_stall = 1'b0;
+
   imem #(
       .NUM_BUNDLES (N_GRANDE),
       .INIT_FILE   ("")
   ) u_mem (
       .clk    (clk),
+      .stall  (imem_stall),
       .addr   (addr),
       .bundle (bundle)
   );
@@ -86,6 +91,7 @@ module tb_imem;
       .INIT_FILE   ("../tb/imem_init.hex")
   ) u_arch (
       .clk    (clk),
+      .stall  (imem_stall),
       .addr   (addr_f),
       .bundle (bundle_f)
   );

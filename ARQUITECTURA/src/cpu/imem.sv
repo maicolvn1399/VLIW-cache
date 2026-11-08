@@ -99,6 +99,21 @@ module imem #(
 ) (
     input  logic                  clk,
 
+    // Congelamiento por la jerarquia de memoria (enunciado 3.3).
+    //
+    // El registro de salida de esta memoria ES, de hecho, la mitad de la
+    // frontera IF/ID: reg_if_id.sv lleva el PC y la validez del bundle, y este
+    // registro lleva sus 128 bits. Las dos mitades tienen que congelarse
+    // juntas.
+    //
+    // Si solo se congelara reg_if_id, a partir del segundo ciclo de stall el
+    // PC de ID y el bundle de ID dejarian de corresponderse: el PC seguiria
+    // apuntando al bundle detenido mientras estos 128 bits ya traerian el
+    // siguiente. Al levantarse el stall, ID decodificaria el bundle
+    // equivocado, el detenido se perderia sin ejecutarse y el que lo sigue se
+    // ejecutaria dos veces. El programa no falla ni avisa: calcula otra cosa.
+    input  logic                  stall,
+
     // Direccion de byte, la del contador de programa
     input  logic [`XLEN-1:0]      addr,
 
@@ -161,7 +176,8 @@ module imem #(
   // ---------------------------------------------------------------------------
 
   always_ff @(posedge clk) begin
-    bundle <= in_range ? storage[index] : {`BUNDLE_W{1'b0}};
+    if (!stall)
+      bundle <= in_range ? storage[index] : {`BUNDLE_W{1'b0}};
   end
 
 endmodule

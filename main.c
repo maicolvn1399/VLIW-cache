@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include "ast.h"
 #include "enlace.h"
@@ -21,6 +22,8 @@
 #include "tac.h"
 #include "codegen.h"
 #include "bloques.h"
+#include "muerto.h"
+#include "vivacidad.h"
 
 extern FILE *yyin;
 extern char *yytext;
@@ -66,7 +69,20 @@ static int modo_asm = 0;
 static int modo_ensamblar = 0;
 static int modo_paquetes = 0;
 static int modo_objeto = 0;        /* -c: solo compilar, generar .nvo */
+static int modo_vivacidad = 0;     /* --vivacidad: conjuntos del analisis */
+static int nivel_opt = 0;          /* -O0 / -O1: eliminacion de codigo muerto */
+static int modo_metricas = 0;      /* --metricas: que costo y que se gano */
 static const char *archivo_salida = NULL;
+static clock_t reloj_inicio;       /* para medir el tiempo de compilacion */
+
+/* Cuantas instrucciones de tres direcciones tiene la lista. */
+static int contar_tac(const TACList *l) {
+    int n = 0;
+    const TACInst *i;
+    if (l == NULL) return 0;
+    for (i = l->head; i != NULL; i = i->next) n++;
+    return n;
+}
 
 /* -I: directorios donde buscar modulos importados. */
 
@@ -302,6 +318,10 @@ static void print_usage(const char *prog) {
         "  --sym, -m         Imprime la tabla de simbolos (Fase 3)\n"
         "  --ir              Codigo de tres direcciones (Fase 4)\n"
         "  --bloques         Bloques basicos y grafo de flujo de control\n"
+        "  --vivacidad       Analisis de vivacidad: USO, DEF, VIVO_ENT, VIVO_SAL\n"
+        "  -O0, -O1          Nivel de optimizacion (0 por omision)\n"
+        "  --optimizar       Equivale a -O1\n"
+        "  --metricas        Que costo optimizar y que se gano\n"
         "  -s                Genera binario y ensamblador .asm; tambien lo muestra\n"
         "  -x                Ensambla un archivo .s a imagen binaria .hex\n"
         "  -p                Muestra paquetes con slots y codificacion hexadecimal\n"
@@ -322,6 +342,9 @@ static const struct option opciones_largas[] = {
     {"sym",     no_argument, NULL, 'm'},
     {"ir",      no_argument, NULL, 1001},
     {"bloques", no_argument, NULL, 1004},
+    {"vivacidad", no_argument, NULL, 1005},
+    {"metricas",  no_argument, NULL, 1006},
+    {"optimizar", no_argument, NULL, 1007},
     {"version", no_argument, NULL, 1002},
     {"max-errors", required_argument, NULL, 1003},
     {"help",    no_argument, NULL, 'h'},
@@ -330,12 +353,13 @@ static const struct option opciones_largas[] = {
 
 int main(int argc, char **argv) {
     int opt;
+    reloj_inicio = clock();
     /*
      * Se leen todas las banderas antes de abrir la fase real de compilacion.
      * Esto permite decidir si se ejecuta solo la fase 1, la fase 2 o un
      * modo de diagnostico simple.
      */
-    while ((opt = getopt_long(argc, argv, "o:I:W:vtsmclhwxp", opciones_largas, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:I:W:O:vtsmclhwxp", opciones_largas, NULL)) != -1) {
         switch (opt) {
             case 'h': print_usage(argv[0]); return 0;
             case 1003: {
@@ -353,6 +377,19 @@ int main(int argc, char **argv) {
             case 1002: printf("novac (Nova) 0.5 - fases 1 a 6: lexico, sintactico, semantico,\n       ensamblador, calculo de saltos y binario CERBERO\n"); return 0;
             case 1001: modo_ir = 1; break;
             case 1004: modo_bloques = 1; break;
+            case 1005: modo_vivacidad = 1; break;
+            case 1006: modo_metricas = 1; break;
+            case 1007: nivel_opt = 1; break;
+            case 'O':
+                /* -O0 y -O1. getopt entrega lo que sigue a -O. */
+                if (strcmp(optarg, "0") == 0) nivel_opt = 0;
+                else if (strcmp(optarg, "1") == 0) nivel_opt = 1;
+                else {
+                    fprintf(stderr, "novac: nivel de optimizacion desconocido: "
+                                    "'-O%s' (se espera -O0 o -O1)\n", optarg);
+                    return 2;
+                }
+                break;
             case 'o': archivo_salida = optarg; break;
             case 'v': modo_verbose = 1; break;
             case 't': modo_arbol = 1; break;
@@ -396,7 +433,8 @@ int main(int argc, char **argv) {
     int extra_count = argc - optind - 1;
     if (modo_ensamblar) {
         if (extra_count > 0 || modo_objeto || modo_lexer || modo_arbol ||
-            modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes) {
+            modo_symtab || modo_ir || modo_bloques || modo_vivacidad ||
+            modo_asm || modo_paquetes) {
             fprintf(stderr, "novac: -x recibe un solo .s y no se combina con opciones de inspeccion o -c\n");
             return 2;
         }
@@ -419,7 +457,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "novac: -c recibe un solo modulo fuente por invocacion\n");
         return 2;
     }
-    if ((modo_lexer || modo_arbol || modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes) && extra_count > 0) {
+    if ((modo_lexer || modo_arbol || modo_symtab || modo_ir || modo_bloques ||
+         modo_vivacidad || modo_asm || modo_paquetes) && extra_count > 0) {
         fprintf(stderr, "novac: las opciones de inspeccion reciben un solo archivo\n");
         return 2;
     }
@@ -495,8 +534,10 @@ int main(int argc, char **argv) {
      */
     if (modo_verbose) fprintf(stderr, "== Fase 3: Analisis Semantico -- %s ==\n", archivo_fuente);
 
-    if (!modo_arbol && (modo_objeto || modo_symtab || modo_ir || modo_bloques || modo_asm || modo_paquetes ||
-                        (!modo_arbol && !modo_symtab && !modo_ir && !modo_bloques && !modo_asm && !modo_paquetes))) {
+    if (!modo_arbol && (modo_objeto || modo_symtab || modo_ir || modo_bloques ||
+                        modo_vivacidad || modo_asm || modo_paquetes ||
+                        (!modo_arbol && !modo_symtab && !modo_ir && !modo_bloques &&
+                         !modo_vivacidad && !modo_asm && !modo_paquetes))) {
         if (!link_modules(raiz_ast, archivo_fuente, extra_paths, extra_count)) {
             liberar_ast(raiz_ast);
             release_modules();
@@ -522,7 +563,20 @@ int main(int argc, char **argv) {
      * se mide el marco de cada funcion con el layout de fase 4. */
     if (modo_symtab) {
         TACList *layout_tac = tac_generate_from_ast(raiz_ast, tabla);
-        bool layout_ok = codegen_update_symbol_layout(layout_tac, tabla);
+        bool layout_ok;
+        /*
+         * El layout se mide sobre el MISMO codigo que se va a generar. Si se
+         * esta compilando con -O1 hay que optimizar tambien esta copia: quitar
+         * instrucciones acorta los rangos de vida de los temporales y puede
+         * cambiar el marco, y con el las direcciones que imprime --sym. Sin
+         * esto, la tabla de simbolos describiria un programa distinto del que
+         * sale en el binario.
+         *
+         * Se pasa avisar=0 porque las advertencias W010 ya salen de la pasada
+         * real; aqui se duplicarian.
+         */
+        if (nivel_opt > 0) muerto_eliminar(layout_tac, NULL, 0);
+        layout_ok = codegen_update_symbol_layout(layout_tac, tabla);
         tac_free(layout_tac);
         if (!layout_ok) {
             if (diag_errores() == 0)
@@ -595,10 +649,11 @@ int main(int argc, char **argv) {
         return object_rc;
     }
 
-    /* Las advertencias se resumen aunque la compilacion haya salido bien. */
-    if (diag_advertencias() > 0) diag_resumen();
-
     /*
+     * El resumen de advertencias va al final de todo, no aqui: la fase 6 todavia
+     * puede agregar las suyas (W010, asignaciones muertas) y el conteo tiene que
+     * incluirlas.
+     *
      * Fase 4: codigo intermedio y ensamblador de CERBERO. El AST ya viene
      * decorado por la fase 3 con la direccion de cada nombre.
      */
@@ -607,13 +662,37 @@ int main(int argc, char **argv) {
      * binario, como dice el documento. --ir y -s son volcados de texto que
      * reemplazan al binario para poder revisar la fase por partes.
      */
-    int modo_binario = (!modo_ir && !modo_bloques && !modo_arbol && !modo_symtab && !modo_paquetes);
+    int modo_binario = (!modo_ir && !modo_bloques && !modo_vivacidad &&
+                        !modo_arbol && !modo_symtab && !modo_paquetes);
 
-    if (modo_ir || modo_bloques || modo_asm || modo_paquetes || modo_binario) {
+    if (modo_ir || modo_bloques || modo_vivacidad || modo_asm || modo_paquetes ||
+        modo_binario) {
         if (modo_verbose) fprintf(stderr, "== Fase 4: Generacion de codigo -- %s ==\n", archivo_fuente);
 
         TACList *tac = tac_generate_from_ast(raiz_ast, tabla);
         bool gen_ok = true;
+        ReporteMuerto rep_muerto;
+        double ms_opt = 0.0;
+
+        memset(&rep_muerto, 0, sizeof(rep_muerto));
+
+        /*
+         * Fase 6: optimizacion sobre el codigo intermedio.
+         *
+         * Va aqui, entre la generacion del TAC y todo lo demas, para que las
+         * vistas posteriores -- --ir, --bloques, --vivacidad, el ensamblador y
+         * el binario -- muestren exactamente el codigo que se va a ejecutar. Si
+         * se optimizara despues del volcado, el listado y el programa dirian
+         * cosas distintas.
+         */
+        if (nivel_opt > 0) {
+            clock_t t0 = clock();
+            if (modo_verbose)
+                fprintf(stderr, "== Fase 6: Optimizacion (-O%d) -- %s ==\n",
+                        nivel_opt, archivo_fuente);
+            muerto_eliminar(tac, &rep_muerto, 1);
+            ms_opt = 1000.0 * (double)(clock() - t0) / CLOCKS_PER_SEC;
+        }
 
         if (modo_ir) {
             FILE *salida = stdout;
@@ -653,6 +732,34 @@ int main(int argc, char **argv) {
             }
             g = cfg_construir(tac);
             cfg_imprimir(salida, g);
+            cfg_liberar(g);
+            if (salida != stdout) fclose(salida);
+        }
+        if (modo_vivacidad) {
+            /*
+             * Analisis de vivacidad sobre ese mismo grafo. Se reconstruye aqui
+             * en vez de guardarlo del bloque anterior porque --bloques y
+             * --vivacidad son independientes: cada una se puede pedir sola.
+             */
+            FILE *salida = stdout;
+            GrafoFlujo *g;
+            Vivacidad *v;
+            if (archivo_salida != NULL) {
+                salida = fopen(archivo_salida,
+                               (modo_ir || modo_bloques) ? "a" : "w");
+                if (salida == NULL) {
+                    fprintf(stderr, "novac: no se pudo escribir '%s'\n", archivo_salida);
+                    tac_free(tac);
+                    symtab_destroy(tabla);
+                    liberar_ast(raiz_ast);
+                    release_modules();
+                    return 3;
+                }
+            }
+            g = cfg_construir(tac);
+            v = viv_analizar(g, tac);
+            viv_imprimir(salida, v);
+            viv_liberar(v);
             cfg_liberar(g);
             if (salida != stdout) fclose(salida);
         }
@@ -743,6 +850,81 @@ int main(int argc, char **argv) {
             else if (modo_verbose) fprintf(stderr, "ejecutable escrito en '%s'\n", destino);
         }
 
+        if (modo_metricas) {
+            /*
+             * Metricas de compilacion. Las de ejecucion no se pueden medir
+             * aqui: las entregan los contadores del procesador al correr el
+             * binario sobre el RTL (ARQUITECTURA/tools/tabla_metricas.py).
+             * Lo que se mide aqui es lo que cuesta optimizar y cuanto codigo
+             * se quito; el intercambio entre las dos cosas es justamente el
+             * punto: el compilador tarda mas para que el programa tarde menos.
+             */
+            GrafoFlujo *g = cfg_construir(tac);
+            int bloques = 0, inalcanzables = 0, aristas = 0, f;
+
+            for (f = 0; g != NULL && f < g->n_funciones; f++) {
+                bloques       += g->funciones[f].n_bloques;
+                aristas       += g->funciones[f].n_aristas;
+                inalcanzables += g->funciones[f].n_inalcanzables;
+            }
+
+            printf("=== Metricas de compilacion ===\n");
+            printf("  nivel de optimizacion:             -O%d\n", nivel_opt);
+            printf("  tiempo total de compilacion:       %.2f ms\n",
+                   1000.0 * (double)(clock() - reloj_inicio) / CLOCKS_PER_SEC);
+            if (nivel_opt > 0)
+                printf("  del cual, la fase 6:               %.2f ms\n", ms_opt);
+            printf("  instrucciones de tres direcciones: %d\n",
+                   nivel_opt > 0 ? rep_muerto.inst_despues
+                                 : contar_tac(tac));
+            if (nivel_opt > 0) {
+                int quitadas = rep_muerto.inst_antes - rep_muerto.inst_despues;
+                printf("    antes de optimizar:              %d\n",
+                       rep_muerto.inst_antes);
+                printf("    eliminadas:                      %d (%.1f%%)\n",
+                       quitadas,
+                       rep_muerto.inst_antes > 0
+                           ? 100.0 * quitadas / rep_muerto.inst_antes : 0.0);
+                printf("      en bloques inalcanzables:      %d (en %d bloque%s)\n",
+                       rep_muerto.inst_de_bloques,
+                       rep_muerto.bloques_eliminados,
+                       rep_muerto.bloques_eliminados == 1 ? "" : "s");
+                printf("      definiciones muertas:          %d\n",
+                       rep_muerto.definiciones_muertas);
+                printf("      resultados de llamada sueltos: %d\n",
+                       rep_muerto.resultados_descartados);
+                printf("    rondas hasta el punto fijo:      %d\n",
+                       rep_muerto.rondas);
+            }
+            printf("  bloques basicos:                   %d\n", bloques);
+            printf("  aristas del grafo:                 %d\n", aristas);
+            printf("  bloques inalcanzables que quedan:  %d\n", inalcanzables);
+            cfg_liberar(g);
+
+            {
+                /*
+                 * Tamano del codigo que de verdad se emite. Cada bundle es un
+                 * ciclo de emision, asi que menos bundles es menos tiempo de
+                 * ejecucion; la ocupacion dice cuanto del ancho VLIW se esta
+                 * aprovechando, y es lo que ataca la Iteracion 4.
+                 */
+                CodegenEstadisticas ce;
+                if (codegen_estadisticas(&ce) > 0) {
+                    printf("  bundles emitidos:                  %d  (%d bytes de IMEM)\n",
+                           ce.bundles, ce.bundles * 16);
+                    printf("    slots con trabajo:               %d de %d\n",
+                           ce.slots_usados, ce.bundles * 5);
+                    printf("    ocupacion media:                 %.2f de 5 ranuras\n",
+                           ce.bundles > 0
+                               ? (double)ce.slots_usados / ce.bundles : 0.0);
+                    printf("    bundles totalmente vacios:       %d (%.1f%%)\n",
+                           ce.bundles_vacios,
+                           ce.bundles > 0
+                               ? 100.0 * ce.bundles_vacios / ce.bundles : 0.0);
+                }
+            }
+        }
+
         tac_free(tac);
 
         if (!gen_ok || diag_errores() > 0) {
@@ -754,6 +936,9 @@ int main(int argc, char **argv) {
         }
         if (modo_verbose) fprintf(stderr, "Fase 4 completada sin errores.\n");
     }
+
+    /* Las advertencias se resumen aunque la compilacion haya salido bien. */
+    if (diag_advertencias() > 0) diag_resumen();
 
     symtab_destroy(tabla);
     liberar_ast(raiz_ast);

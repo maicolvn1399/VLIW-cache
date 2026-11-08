@@ -192,6 +192,8 @@ module tb_archivo;
 
   integer i, c, malos;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_archivo.vcd");
@@ -206,7 +208,7 @@ module tb_archivo;
     #1;
     $readmemh("../../tools/programas/cifrar_archivo.hex",    cif.u_imem.storage);
     $readmemh("../../tools/programas/descifrar_archivo.hex", des.u_imem.storage);
-    $readmemh("../../tools/programas/archivo_prueba.hex",    cif.u_dmem.storage);
+    $readmemh("../../tools/programas/archivo_prueba.hex",    cif.u_mem_sys.u_mem.storage);
 
     $display("=== tb_archivo: cifrar y descifrar un archivo completo ===");
     $display("");
@@ -216,13 +218,13 @@ module tb_archivo;
     // ------------------------------------------------------------------------
 
     check_int("la cabecera dice los bytes del archivo",
-              cif.u_dmem.storage[W_BUF], N_BYTES);
+              cif.u_mem_sys.u_mem.storage[W_BUF], N_BYTES);
     check_int("y la cantidad de bloques de 64 bits",
-              cif.u_dmem.storage[W_BUF + 1], N_BLOQUES);
+              cif.u_mem_sys.u_mem.storage[W_BUF + 1], N_BLOQUES);
 
     malos = 0;
     for (i = 0; i < 2 * N_BLOQUES; i = i + 1)
-      if (cif.u_dmem.storage[W_BUF + 2 + i] !== CLARO[i]) malos = malos + 1;
+      if (cif.u_mem_sys.u_mem.storage[W_BUF + 2 + i] !== CLARO[i]) malos = malos + 1;
     check_int("y las seis palabras del archivo en claro", malos, 0);
 
     // ------------------------------------------------------------------------
@@ -241,6 +243,21 @@ module tb_archivo;
     repeat (8) @(posedge clk);
     #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(cif.mem_drenada && des.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
     $display("  (se detuvo tras %0d ciclos, %0d bloques)", c, N_BLOQUES);
 
     check1("el procesador que cifra se detuvo", halt_c, 1'b1);
@@ -251,22 +268,22 @@ module tb_archivo;
     // El criptograma, contra los valores calculados aparte
     for (i = 0; i < 2 * N_BLOQUES; i = i + 1)
       check32($sformatf("palabra %0d cifrada", i),
-              cif.u_dmem.storage[W_BUF + 2 + i], CIFRADO[i]);
+              cif.u_mem_sys.u_mem.storage[W_BUF + 2 + i], CIFRADO[i]);
 
     // La cabecera no se toca: el puntero arranca en 0x4008
     check_int("la cabecera sobrevivio al cifrado, bytes",
-              cif.u_dmem.storage[W_BUF], N_BYTES);
+              cif.u_mem_sys.u_mem.storage[W_BUF], N_BYTES);
     check_int("y la cantidad de bloques",
-              cif.u_dmem.storage[W_BUF + 1], N_BLOQUES);
+              cif.u_mem_sys.u_mem.storage[W_BUF + 1], N_BLOQUES);
 
     // Y nada del claro quedo en el buffer
     malos = 0;
     for (i = 0; i < 2 * N_BLOQUES; i = i + 1)
-      if (cif.u_dmem.storage[W_BUF + 2 + i] === CLARO[i]) malos = malos + 1;
+      if (cif.u_mem_sys.u_mem.storage[W_BUF + 2 + i] === CLARO[i]) malos = malos + 1;
     check_int("ninguna palabra quedo en claro", malos, 0);
 
     // Para que extract_data.py pueda trabajar sobre un volcado de verdad
-    $writememh("cifrado_volcado.hex", cif.u_dmem.storage);
+    $writememh("cifrado_volcado.hex", cif.u_mem_sys.u_mem.storage);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -276,11 +293,11 @@ module tb_archivo;
     rst_n = 1'b0;
     @(negedge clk);
     for (i = 0; i < N_WORDS; i = i + 1)
-      des.u_dmem.storage[i] = cif.u_dmem.storage[i];
+      des.u_mem_sys.u_mem.storage[i] = cif.u_mem_sys.u_mem.storage[i];
 
     malos = 0;
     for (i = 0; i < 2 * N_BLOQUES; i = i + 1)
-      if (des.u_dmem.storage[W_BUF + 2 + i] !== CIFRADO[i]) malos = malos + 1;
+      if (des.u_mem_sys.u_mem.storage[W_BUF + 2 + i] !== CIFRADO[i]) malos = malos + 1;
     check_int("el criptograma llego entero al segundo", malos, 0);
 
     // ------------------------------------------------------------------------
@@ -299,6 +316,21 @@ module tb_archivo;
     repeat (8) @(posedge clk);
     #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(cif.mem_drenada && des.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
     $display("  (se detuvo tras %0d ciclos)", c);
 
     check1("el procesador que descifra se detuvo", halt_d, 1'b1);
@@ -312,10 +344,10 @@ module tb_archivo;
 
     for (i = 0; i < 2 * N_BLOQUES; i = i + 1)
       check32($sformatf("palabra %0d en claro otra vez", i),
-              des.u_dmem.storage[W_BUF + 2 + i], CLARO[i]);
+              des.u_mem_sys.u_mem.storage[W_BUF + 2 + i], CLARO[i]);
 
     check_int("y la cabecera sigue intacta",
-              des.u_dmem.storage[W_BUF], N_BYTES);
+              des.u_mem_sys.u_mem.storage[W_BUF], N_BYTES);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -327,14 +359,14 @@ module tb_archivo;
 
     malos = 0;
     for (i = 0; i < N_WORDS; i = i + 1) begin
-      if (cif.u_dmem.storage[i] === 32'h1111_1111 ||
-          cif.u_dmem.storage[i] === 32'h2222_2222 ||
-          cif.u_dmem.storage[i] === 32'h3333_3333 ||
-          cif.u_dmem.storage[i] === 32'h4444_4444) malos = malos + 1;
-      if (des.u_dmem.storage[i] === 32'h1111_1111 ||
-          des.u_dmem.storage[i] === 32'h2222_2222 ||
-          des.u_dmem.storage[i] === 32'h3333_3333 ||
-          des.u_dmem.storage[i] === 32'h4444_4444) malos = malos + 1;
+      if (cif.u_mem_sys.u_mem.storage[i] === 32'h1111_1111 ||
+          cif.u_mem_sys.u_mem.storage[i] === 32'h2222_2222 ||
+          cif.u_mem_sys.u_mem.storage[i] === 32'h3333_3333 ||
+          cif.u_mem_sys.u_mem.storage[i] === 32'h4444_4444) malos = malos + 1;
+      if (des.u_mem_sys.u_mem.storage[i] === 32'h1111_1111 ||
+          des.u_mem_sys.u_mem.storage[i] === 32'h2222_2222 ||
+          des.u_mem_sys.u_mem.storage[i] === 32'h3333_3333 ||
+          des.u_mem_sys.u_mem.storage[i] === 32'h4444_4444) malos = malos + 1;
     end
     check_int("ninguna subllave aparece en los 64 KB de datos", malos, 0);
 

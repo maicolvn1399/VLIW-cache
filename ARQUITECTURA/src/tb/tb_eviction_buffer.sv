@@ -44,13 +44,14 @@ module tb_eviction_buffer;
   logic                    push;
   logic [`MEM_LIDX_W-1:0]  push_linea;
   logic [`LINE_W-1:0]      push_datos;
-  logic [`LINE_WORDS-1:0]  push_mascara;
+  logic [`LINE_MASK_W-1:0] push_mascara;
 
   logic                    head_valido;
   logic [`MEM_LIDX_W-1:0]  head_linea;
   logic [`LINE_W-1:0]      head_datos;
-  logic [`LINE_WORDS-1:0]  head_mascara;
+  logic [`LINE_MASK_W-1:0] head_mascara;
   logic                    head_ack;
+  logic                    head_ocupada;
 
   logic [`MEM_LIDX_W-1:0]  consulta_linea;
   logic                    conflicto;
@@ -69,6 +70,7 @@ module tb_eviction_buffer;
       .head_datos     (head_datos),
       .head_mascara   (head_mascara),
       .head_ack       (head_ack),
+      .head_ocupada   (head_ocupada),
       .consulta_linea (consulta_linea),
       .conflicto      (conflicto),
       .lleno          (lleno),
@@ -163,9 +165,22 @@ module tb_eviction_buffer;
     end
   endfunction
 
+  // La mascara del buffer es por BYTE. Estas pruebas razonan casi siempre en
+  // palabras, asi que mp() expande una mascara de 8 palabras a los 32 bits de
+  // byte que el modulo espera. Las pruebas que si razonan por byte arman la
+  // mascara a mano, que es justamente de lo que se trata el caso 9.
+  function automatic logic [`LINE_MASK_W-1:0] mp(input logic [`LINE_WORDS-1:0] palabras);
+    integer w;
+    begin
+      mp = '0;
+      for (w = 0; w < `LINE_WORDS; w = w + 1)
+        if (palabras[w]) mp[w*4 +: 4] = 4'hF;
+    end
+  endfunction
+
   task automatic depositar(input logic [`MEM_LIDX_W-1:0] l,
                            input logic [`LINE_W-1:0]     d,
-                           input logic [`LINE_WORDS-1:0] m);
+                           input logic [`LINE_MASK_W-1:0] m);
     begin
       push         = 1'b1;
       push_linea   = l;
@@ -204,6 +219,7 @@ module tb_eviction_buffer;
       push_datos     = '0;
       push_mascara   = '0;
       head_ack       = 1'b0;
+      head_ocupada   = 1'b0;
       consulta_linea = '0;
       @(posedge clk);
       #1 rst_n = 1'b1;
@@ -239,13 +255,13 @@ module tb_eviction_buffer;
     // ---- 2. Deposito y drenado ---------------------------------------------
     $display("");
     $display("[2] una linea entra, sale igual");
-    depositar(11'h123, linea_patron(32'hAA00_0000), 8'hFF);
+    depositar(11'h123, linea_patron(32'hAA00_0000), mp(8'hFF));
     check("ocupadas tras depositar", ocupadas, 1);
     check1("la cabeza es valida",    head_valido, 1'b1);
     check("la linea de la cabeza",   head_linea,  11'h123);
     check_hex("palabra 0",           palabra(head_datos, 0), 32'hAA00_0000);
     check_hex("palabra 7",           palabra(head_datos, 7), 32'hAA00_0007);
-    check("la mascara",              head_mascara, 8'hFF);
+    check("la mascara",              head_mascara, mp(8'hFF));
 
     drenar();
     check1("vacio tras drenar", vacio, 1'b1);
@@ -258,7 +274,7 @@ module tb_eviction_buffer;
     $display("[3] se llena, avisa, y se vacia en orden");
     reiniciar();
     for (i = 0; i < ENTRIES; i = i + 1)
-      depositar(11'h200 + i[`MEM_LIDX_W-1:0], linea_patron(i * 32'h100), 8'hFF);
+      depositar(11'h200 + i[`MEM_LIDX_W-1:0], linea_patron(i * 32'h100), mp(8'hFF));
 
     check("ocupadas",       ocupadas, ENTRIES);
     check1("lleno",         lleno,    1'b1);
@@ -282,7 +298,7 @@ module tb_eviction_buffer;
     consultar(11'h0AB);
     check1("sin conflicto con el buffer vacio", conflicto, 1'b0);
 
-    depositar(11'h0AB, linea_patron(32'hBB00_0000), 8'hFF);
+    depositar(11'h0AB, linea_patron(32'hBB00_0000), mp(8'hFF));
     check1("conflicto con la linea encolada", conflicto, 1'b1);
 
     consultar(11'h0AC);
@@ -296,9 +312,9 @@ module tb_eviction_buffer;
     $display("    el conflicto sigue encendido mientras la entrada espera");
     reiniciar();
     consultar(11'h300);
-    depositar(11'h100, linea_patron(32'h1000), 8'hFF);
-    depositar(11'h200, linea_patron(32'h2000), 8'hFF);
-    depositar(11'h300, linea_patron(32'h3000), 8'hFF);
+    depositar(11'h100, linea_patron(32'h1000), mp(8'hFF));
+    depositar(11'h200, linea_patron(32'h2000), mp(8'hFF));
+    depositar(11'h300, linea_patron(32'h3000), mp(8'hFF));
     check1("conflicto con la tercera entrada", conflicto, 1'b1);
     drenar();
     check1("sigue tras drenar la primera",     conflicto, 1'b1);
@@ -314,21 +330,21 @@ module tb_eviction_buffer;
     $display("");
     $display("[5] dos escrituras a la misma linea ocupan una sola entrada");
     reiniciar();
-    depositar(11'h0F0, linea_patron(32'hC000_0000), 8'b0000_0001);
+    depositar(11'h0F0, linea_patron(32'hC000_0000), mp(8'b0000_0001));
     check("ocupadas tras la primera", ocupadas, 1);
-    depositar(11'h0F0, linea_patron(32'hD000_0000), 8'b0000_0010);
+    depositar(11'h0F0, linea_patron(32'hD000_0000), mp(8'b0000_0010));
     check("ocupadas tras la segunda", ocupadas, 1);
-    check("la mascara se combino",    head_mascara, 8'b0000_0011);
+    check("la mascara se combino",    head_mascara, mp(8'b0000_0011));
 
     $display("");
     $display("[6] la palabra mas reciente gana, las demas se conservan");
     reiniciar();
     // Primero la linea entera con el patron C
-    depositar(11'h0F0, linea_patron(32'hC000_0000), 8'hFF);
+    depositar(11'h0F0, linea_patron(32'hC000_0000), mp(8'hFF));
     // Despues solo la palabra 3, con el patron D
     esperada                      = linea_patron(32'hC000_0000);
     esperada[3*`XLEN +: `XLEN]    = 32'hD000_0003;
-    depositar(11'h0F0, linea_patron(32'hD000_0000), 8'b0000_1000);
+    depositar(11'h0F0, linea_patron(32'hD000_0000), mp(8'b0000_1000));
 
     check("sigue siendo una entrada", ocupadas, 1);
     check_hex("palabra 2 sin tocar",  palabra(head_datos, 2),
@@ -337,7 +353,7 @@ module tb_eviction_buffer;
               palabra(esperada, 3));
     check_hex("palabra 4 sin tocar",  palabra(head_datos, 4),
               palabra(esperada, 4));
-    check("la mascara sigue completa", head_mascara, 8'hFF);
+    check("la mascara sigue completa", head_mascara, mp(8'hFF));
 
     // ---- 7. Deposito y drenado a la vez ------------------------------------
     // El controlador drena mientras la cache sigue desalojando. Son punteros
@@ -345,14 +361,14 @@ module tb_eviction_buffer;
     $display("");
     $display("[7] depositar y drenar en el mismo ciclo");
     reiniciar();
-    depositar(11'h400, linea_patron(32'h4000), 8'hFF);
-    depositar(11'h401, linea_patron(32'h4100), 8'hFF);
+    depositar(11'h400, linea_patron(32'h4000), mp(8'hFF));
+    depositar(11'h401, linea_patron(32'h4100), mp(8'hFF));
     check("ocupadas antes", ocupadas, 2);
 
     push         = 1'b1;
     push_linea   = 11'h402;
     push_datos   = linea_patron(32'h4200);
-    push_mascara = 8'hFF;
+    push_mascara = mp(8'hFF);
     head_ack     = 1'b1;
     @(posedge clk);
     #1;
@@ -370,14 +386,14 @@ module tb_eviction_buffer;
     $display("");
     $display("[8] fusionar contra la cabeza que se drena NO pierde el dato");
     reiniciar();
-    depositar(11'h500, linea_patron(32'h5000_0000), 8'hFF);
+    depositar(11'h500, linea_patron(32'h5000_0000), mp(8'hFF));
     check("una entrada encolada", ocupadas, 1);
 
     // Deposito a la MISMA linea en el ciclo en que la cabeza se confirma
     push         = 1'b1;
     push_linea   = 11'h500;
     push_datos   = linea_patron(32'h9000_0000);
-    push_mascara = 8'hFF;
+    push_mascara = mp(8'hFF);
     head_ack     = 1'b1;
     @(posedge clk);
     #1;
@@ -389,6 +405,88 @@ module tb_eviction_buffer;
     check("de la misma linea",           head_linea, 11'h500);
     check_hex("con el dato NUEVO",       palabra(head_datos, 0),
               32'h9000_0000);
+
+    // ---- 9. Fusion por byte dentro de una misma palabra --------------------
+    // Esta es la razon por la que la mascara es por byte y no por palabra.
+    //
+    // Con write-through y no-write-allocate, dos SB consecutivos a bytes
+    // distintos de la misma palabra llegan aqui como dos depositos a la misma
+    // linea. Fusionando por palabra, el segundo traeria su palabra entera y
+    // pisaria el byte que escribio el primero con lo que la cache tuviera ahi,
+    // que en un write miss no es nada. El resultado seria un byte perdido, sin
+    // ninguna senal de error.
+    $display("");
+    $display("[9] dos stores de un byte a la misma palabra no se pisan");
+    reiniciar();
+
+    // Un SB al byte 0 de la palabra 0
+    esperada           = '0;
+    esperada[7:0]      = 8'hA1;
+    depositar(11'h600, esperada, 32'b0000_0000_0000_0000_0000_0000_0000_0001);
+    check("el primer byte encolado", ocupadas, 1);
+
+    // Un SB al byte 1 de la MISMA palabra, con el resto de la linea en cero
+    esperada           = '0;
+    esperada[15:8]     = 8'hB2;
+    depositar(11'h600, esperada, 32'b0000_0000_0000_0000_0000_0000_0000_0010);
+
+    check("sigue siendo una entrada",   ocupadas, 1);
+    check_hex("byte 0 conservado",      {24'd0, head_datos[7:0]},   32'hA1);
+    check_hex("byte 1 agregado",        {24'd0, head_datos[15:8]},  32'hB2);
+    check("la mascara tiene los dos bytes",
+          head_mascara & 32'hFF, 32'b11);
+
+    // Y los bytes que nadie escribio siguen sin marcar: la memoria no debe
+    // tocarlos cuando esta entrada se drene
+    check("el byte 2 sigue sin marcar", (head_mascara >> 2) & 1, 0);
+    check("el byte 3 sigue sin marcar", (head_mascara >> 3) & 1, 0);
+
+    // ---- 10. Fusionar contra una cabeza EN VUELO ---------------------------
+    // El caso mas dificil de ver de todo el modulo, y uno que costo un bug real
+    // en la integracion de la Iteracion 3.
+    //
+    // Drenar una linea tarda T_mem ciclos, y el controlador trabaja desde una
+    // COPIA que se lleva al arrancar. Mientras esa escritura esta en vuelo, la
+    // entrada original sigue en el buffer y parece fusionable. No lo es: lo que
+    // se fusionara ahi modificaria la entrada pero no la copia, y se perderia
+    // al confirmarse el drenado, decenas de ciclos despues y lejos de donde se
+    // escribio.
+    //
+    // head_ocupada marca esa ventana. Con ella encendida, el deposito tiene que
+    // ocupar una entrada NUEVA.
+    $display("");
+    $display("[10] fusionar contra una cabeza en vuelo usa otra entrada");
+    reiniciar();
+
+    depositar(11'h700, linea_patron(32'h7000_0000), mp(8'b0000_0001));
+    check("una entrada encolada", ocupadas, 1);
+
+    // El controlador arranca el drenado: la cabeza queda en vuelo
+    head_ocupada = 1'b1;
+    #1;
+
+    // Llega un deposito a la MISMA linea, a otra palabra
+    depositar(11'h700, linea_patron(32'h8000_0000), mp(8'b0000_0010));
+
+    check("NO se fusiono: hay dos entradas", ocupadas, 2);
+    check("y la cabeza quedo intacta",       head_mascara, mp(8'b0000_0001));
+    check_hex("con su dato original",        palabra(head_datos, 0),
+              32'h7000_0000);
+
+    // Al terminar el drenado, la segunda entrada queda como cabeza y lleva lo
+    // que no alcanzo a fusionarse: nada se perdio, solo tarda una transaccion
+    // mas en llegar a memoria.
+    head_ocupada = 1'b0;
+    drenar();
+    check("queda la segunda entrada",  ocupadas, 1);
+    check("con su propia mascara",     head_mascara, mp(8'b0000_0010));
+    check_hex("y su propio dato",      palabra(head_datos, 1), 32'h8000_0001);
+
+    // Sin la ventana en vuelo, la fusion sigue funcionando como siempre
+    reiniciar();
+    depositar(11'h700, linea_patron(32'h7000_0000), mp(8'b0000_0001));
+    depositar(11'h700, linea_patron(32'h8000_0000), mp(8'b0000_0010));
+    check("sin cabeza en vuelo si fusiona", ocupadas, 1);
 
 `ifdef FORCE_FAIL
     check("caso inyectado a proposito", ocupadas, 99);

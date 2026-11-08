@@ -1,0 +1,29 @@
+# Vivacidad: lo que NO se puede eliminar aunque el destino este muerto.
+#
+# Las tres asignaciones de abajo tienen un destino que nadie lee, pero ninguna
+# se puede borrar sin cambiar el programa:
+#
+#   division   __nova_div32 termina con el codigo 136 si el divisor es cero,
+#              asi que borrarla convierte un programa que aborta en uno que no.
+#   indexado   el acceso al arreglo emite una verificacion de rango que puede
+#              terminar con el codigo 134.
+#   llamada    'ruidosa' escribe por consola: el efecto es el punto, no el
+#              valor que devuelve.
+functio ruidosa(x : integer) -> integer {
+    scribe(x);
+    redde x * 2;
+}
+
+functio arriesgar(d : integer, v : integer[]) -> integer {
+    varia division : integer = 100 / d;
+    varia indexado : integer = v[d];
+    varia llamada  : integer = ruidosa(7);
+
+    redde 0;
+}
+
+functio principale() -> integer {
+    varia v : integer[4];
+    v[0] = 1;
+    redde arriesgar(2, v);
+}

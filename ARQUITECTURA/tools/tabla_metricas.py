@@ -37,6 +37,13 @@ CAMPOS = {
     "s4":            r"S4 BRU\s+(\d+)",
     "loads":         r"S2 LSU\s+\d+\s+\((\d+) loads",
     "stores":        r"S2 LSU\s+\d+\s+\(\d+ loads, (\d+) stores",
+    "ld_hit":        r"lecturas: aciertos\s+(\d+)",
+    "ld_miss":       r"lecturas: fallos\s+(\d+)",
+    "st_hit":        r"escrituras: aciertos\s+(\d+)",
+    "st_miss":       r"escrituras: fallos\s+(\d+)",
+    "stall_miss":    r"fallo de lectura\s+(\d+)",
+    "stall_wb":      r"write buffer lleno\s+(\d+)",
+    "stall_raw":     r"conflicto RAW\s+(\d+)",
 }
 
 # ---------------------------------------------------------------------------
@@ -50,6 +57,7 @@ MEM_FIRST_WORD = 25
 LINE_WORDS = 8
 MEM_CLK_DIV = 4
 T_MEM = MEM_FIRST_WORD + (LINE_WORDS - 1) * MEM_CLK_DIV   # 53
+L1_HIT = 1
 
 
 def leer(ruta):
@@ -77,8 +85,44 @@ def razon(numerador, denominador):
     return numerador / denominador if denominador else 0.0
 
 
+def tabla_cache(filas, ancho):
+    """Lo que hizo la cache L1-D en cada programa.
+
+    La tasa de aciertos sale de los cuatro contadores de hit/miss y el AMAT se
+    calcula con la penalidad MEDIDA (ciclos de stall por fallo de lectura), no
+    con T_mem supuesto. Que los dos se parezcan es una comprobacion; que no se
+    parezcan es un hallazgo.
+    """
+    print("  cache L1-D: 4 KB, 2 vias, write-through, no-write-allocate, LRU")
+    print()
+    print(f"  {'programa':<{ancho}}  {'accesos':>8}  {'ld hit':>7}  {'ld mis':>7}  "
+          f"{'st mis':>7}  {'aciertos':>9}  {'AMAT':>6}")
+    print(f"  {'-' * ancho}  {'-' * 8}  {'-' * 7}  {'-' * 7}  "
+          f"{'-' * 7}  {'-' * 9}  {'-' * 6}")
+
+    for f in filas:
+        accesos = f["ld_hit"] + f["ld_miss"] + f["st_hit"] + f["st_miss"]
+        aciertos = f["ld_hit"] + f["st_hit"]
+        tasa = razon(aciertos, accesos)
+        pen = razon(f["stall_miss"], f["ld_miss"])
+        amat = L1_HIT + (1 - tasa) * pen
+        print(f"  {f['programa']:<{ancho}}  {accesos:>8}  {f['ld_hit']:>7}  "
+              f"{f['ld_miss']:>7}  {f['st_miss']:>7}  "
+              f"{100 * tasa:>8.1f}%  {amat:>6.2f}")
+
+    print()
+    print(f"  {'programa':<{ancho}}  {'por miss':>9}  {'por wb lleno':>13}  "
+          f"{'por RAW':>9}  {'total':>9}")
+    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 13}  {'-' * 9}  {'-' * 9}")
+    for f in filas:
+        tot = f["stall_miss"] + f["stall_wb"] + f["stall_raw"]
+        print(f"  {f['programa']:<{ancho}}  {f['stall_miss']:>9}  "
+              f"{f['stall_wb']:>13}  {f['stall_raw']:>9}  {tot:>9}")
+    print()
+
+
 def proyectar_sin_cache(filas, ancho):
-    """Proyecta el costo de correr sin cache, desde los contadores medidos.
+    """Compara lo MEDIDO con la proyeccion sin cache de la Iteracion 2.
 
     No es una simulacion: es una cuenta sobre numeros que el hardware conto de
     verdad. El modelo es el de la Iteracion 2, donde no hay ningun nivel de
@@ -106,42 +150,56 @@ def proyectar_sin_cache(filas, ancho):
     se reportan juntas a proposito: dar un solo numero aqui seria presentar una
     suposicion como si fuera una medicion.
     """
-    print(f"  proyeccion sin cache, con T_mem = {T_MEM} ciclos")
+    print(f"  el veredicto: lo medido contra lo proyectado (T_mem = {T_MEM})")
     print()
-    print(f"  {'programa':<{ancho}}  {'ideal':>9}  {'loads':>7}  {'stores':>7}  "
-          f"{'optimista':>11}  {'x':>5}  {'pesimista':>11}  {'x':>5}")
-    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 7}  {'-' * 7}  "
-          f"{'-' * 11}  {'-' * 5}  {'-' * 11}  {'-' * 5}")
+    print(f"  {'programa':<{ancho}}  {'ideal':>9}  {'medido':>9}  {'sobrec.':>8}  "
+          f"{'optimista':>11}  {'pesimista':>11}  {'gana':>6}")
+    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 9}  {'-' * 8}  "
+          f"{'-' * 11}  {'-' * 11}  {'-' * 6}")
 
-    tot_ideal = tot_opt = tot_pes = 0
+    tot_ideal = tot_med = tot_opt = tot_pes = 0
+    dentro = 0
 
     for f in filas:
-        ideal = f["ciclos"]
-        # El acceso ya costaba un ciclo en el modelo ideal, de ahi el -1
+        # El pipeline sin stalls despacha un bundle por ciclo, asi que la
+        # cuenta de bundles ES el tiempo que el programa habria tardado con la
+        # memoria ideal del Proyecto I. No hay que anotarlo aparte: sale del
+        # mismo contador.
+        ideal = f["bundles"]
+        medido = f["ciclos"]
         opt = ideal + f["loads"] * (T_MEM - 1)
         pes = ideal + (f["loads"] + f["stores"]) * (T_MEM - 1)
 
         tot_ideal += ideal
+        tot_med += medido
         tot_opt += opt
         tot_pes += pes
+        if medido <= opt:
+            dentro += 1
 
-        print(f"  {f['programa']:<{ancho}}  {ideal:>9}  {f['loads']:>7}  "
-              f"{f['stores']:>7}  {opt:>11}  {razon(opt, ideal):>5.1f}  "
-              f"{pes:>11}  {razon(pes, ideal):>5.1f}")
+        print(f"  {f['programa']:<{ancho}}  {ideal:>9}  {medido:>9}  "
+              f"{razon(medido, ideal):>7.2f}x  {opt:>11}  {pes:>11}  "
+              f"{razon(pes, medido):>5.1f}x")
 
-    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 7}  {'-' * 7}  "
-          f"{'-' * 11}  {'-' * 5}  {'-' * 11}  {'-' * 5}")
-    print(f"  {'total':<{ancho}}  {tot_ideal:>9}  "
-          f"{sum(f['loads'] for f in filas):>7}  "
-          f"{sum(f['stores'] for f in filas):>7}  "
-          f"{tot_opt:>11}  {razon(tot_opt, tot_ideal):>5.1f}  "
-          f"{tot_pes:>11}  {razon(tot_pes, tot_ideal):>5.1f}")
+    print(f"  {'-' * ancho}  {'-' * 9}  {'-' * 9}  {'-' * 8}  "
+          f"{'-' * 11}  {'-' * 11}  {'-' * 6}")
+    print(f"  {'total':<{ancho}}  {tot_ideal:>9}  {tot_med:>9}  "
+          f"{razon(tot_med, tot_ideal):>7.2f}x  {tot_opt:>11}  {tot_pes:>11}  "
+          f"{razon(tot_pes, tot_med):>5.1f}x")
     print()
-    print("  Las columnas 'x' son cuantas veces mas lento que el modelo ideal")
-    print("  del Proyecto I, donde la memoria respondia siempre en un ciclo.")
-    print("  Ese es el margen que la jerarquia de cache tiene para recuperar.")
+    print("  ideal      lo que el programa tardaria con memoria de un ciclo.")
+    print("             Es la cuenta de bundles: sin stalls el pipeline")
+    print("             despacha exactamente uno por ciclo.")
+    print("  medido     lo que tardo de verdad, con la jerarquia de cache.")
+    print("  sobrec.    cuanto le costo la memoria real, sobre el ideal.")
+    print("  optimista  la cota de la Iteracion 2 sin cache: solo los loads")
+    print("  pesimista  la cota de la Iteracion 2 sin cache: todo acceso")
+    print("  gana       cuanto mejora la cache sobre la cota pesimista.")
     print()
-
+    print(f"  {dentro} de {len(filas)} programas quedaron POR DEBAJO de la cota")
+    print("  optimista, que suponia memoria sin cache y era el mejor caso")
+    print("  posible sin jerarquia.")
+    print()
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -203,6 +261,7 @@ def main():
     print(f"  reparto del total ({total_instr} operaciones)   {reparto}")
     print()
 
+    tabla_cache(filas, ancho)
     proyectar_sin_cache(filas, ancho)
 
     if any(f["desbordado"] for f in filas):

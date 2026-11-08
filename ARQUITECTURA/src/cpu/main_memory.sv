@@ -77,6 +77,7 @@ module main_memory #(
     // bajos. Una direccion fuera de rango lee cero y su escritura se ignora.
     input  logic [`XLEN-1:0] addr,
     input  logic             we,
+    input  logic [3:0]       be,      // que bytes de la palabra se escriben
     input  logic [`XLEN-1:0] wdata,
 
     output logic [`XLEN-1:0] rdata
@@ -101,9 +102,19 @@ module main_memory #(
 
   // Escritura: solo en los flancos del reloj de memoria. Este es el limite
   // fisico que hace que drenar una linea cueste siete ciclos de memoria.
+  //
+  // Con habilitacion por byte, igual que dmem.sv desde el Proyecto I. Hace
+  // falta porque el ISA tiene SB y SH, y con write-through esos stores llegan
+  // hasta aqui tal como salieron de la LSU: si la memoria solo supiera escribir
+  // palabras enteras, un SB pisaria los otros tres bytes con lo que viniera en
+  // el buffer, que en un write miss no es el contenido real de la memoria.
   always_ff @(posedge clk) begin
-    if (rst_n && tick && we && en_rango)
-      storage[addr] <= wdata;
+    if (rst_n && tick && we && en_rango) begin
+      if (be[0]) storage[addr][7:0]   <= wdata[7:0];
+      if (be[1]) storage[addr][15:8]  <= wdata[15:8];
+      if (be[2]) storage[addr][23:16] <= wdata[23:16];
+      if (be[3]) storage[addr][31:24] <= wdata[31:24];
+    end
   end
 
 endmodule

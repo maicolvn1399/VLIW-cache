@@ -29,10 +29,23 @@
 // hace honesta la comparacion. Una version rapida que calcula otra cosa no
 // prueba nada.
 //
-// El testbench falla si la aceleracion cae por debajo de 2x. No es una
+// El testbench falla si la aceleracion cae por debajo de un minimo. No es una
 // medida de calidad del planificador sino una alarma: si alguien rompe el
 // empaquetado o cambia la latencia del ISA, ese numero se desploma y aqui se
 // nota, en vez de notarse en la revision.
+//
+// EL MINIMO BAJO DE 2.0x A 1.3x EN LA ITERACION 3, Y NO POR UN BUG.
+//
+// Con la memoria ideal del Proyecto I la version VLIW era 2.3x mas rapida.
+// Con la jerarquia de cache la ventaja se comprime a alrededor de 1.5x, y la
+// razon es que las dos versiones hacen los MISMOS accesos a memoria: el
+// empaquetado reordena operaciones, no las elimina. Al bajar el tiempo de
+// computo, lo que queda es la espera, y la espera es igual para las dos.
+//
+// La Iteracion 2 lo predijo a partir de los contadores, antes de que existiera
+// la cache (docs/memoria.md, seccion 5.2). Esta prueba es la confirmacion
+// experimental de esa prediccion, asi que el numero que reporta es un
+// resultado del proyecto y no un umbral que se aflojo para que pasara.
 // =============================================================================
 
 `include "cerbero_defs.svh"
@@ -51,8 +64,13 @@ module tb_vliw;
   localparam int W_RES = 32'h0200 / 4;
   localparam logic [`XLEN-1:0] ESPERADO = 32'd89440;   // suma de 1^2 a 64^2
 
-  // La aceleracion por debajo de la cual algo se rompio
-  localparam real MINIMO = 2.0;
+  // La aceleracion por debajo de la cual algo se rompio. Ver la nota del
+  // encabezado sobre por que bajo de 2.0 a 1.3 al entrar la jerarquia.
+  localparam real MINIMO = 1.3;
+
+  // Lo que medía esta misma prueba con la memoria ideal del Proyecto I, para
+  // que el informe muestre la compresion y no solo el valor nuevo.
+  localparam real ACEL_MEMORIA_IDEAL = 2.30;
 
   logic             halt_s, halt_v;
   logic [`XLEN-1:0] psw_s,  psw_v;
@@ -131,6 +149,8 @@ module tb_vliw;
   integer c, ciclos_s, ciclos_v;
   real    aceleracion;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_vliw.vcd");
@@ -140,9 +160,9 @@ module tb_vliw;
     rst_n = 1'b0;
     #1;
     $readmemh("../../tools/programas/suma_simple_emp.hex",  simple.u_imem.storage);
-    $readmemh("../../tools/programas/suma_simple_emp_datos.hex", simple.u_dmem.storage);
+    $readmemh("../../tools/programas/suma_simple_emp_datos.hex", simple.u_mem_sys.u_mem.storage);
     $readmemh("../../tools/programas/suma_vliw_emp.hex",    vliw.u_imem.storage);
-    $readmemh("../../tools/programas/suma_vliw_emp_datos.hex", vliw.u_dmem.storage);
+    $readmemh("../../tools/programas/suma_vliw_emp_datos.hex", vliw.u_mem_sys.u_mem.storage);
 
     $display("=== tb_vliw: el mismo calculo, con y sin trabajo independiente ===");
     $display("");
@@ -161,6 +181,18 @@ module tb_vliw;
       if (!halt_v) ciclos_v = c;
     end
 
+    // Y espera a que la jerarquia de memoria termine de escribir. Desde la
+    // Iteracion 3 un store pasa por la cache y por dos buffers antes de llegar
+    // a memoria principal, asi que revisarla apenas el programa se detiene
+    // daria por perdidos stores que seguian en camino. Son ciclos del ARNES.
+    guarda_drenado = 0;
+    while (!(simple.mem_drenada && vliw.mem_drenada) && guarda_drenado < 200000) begin
+      @(posedge clk);
+      guarda_drenado = guarda_drenado + 1;
+    end
+    #1;
+
+
     // ------------------------------------------------------------------------
     $display("[1] las dos versiones calculan lo mismo");
     // ------------------------------------------------------------------------
@@ -170,9 +202,9 @@ module tb_vliw;
     check("la version simple llego a HALT", halt_s);
     check("la version VLIW llego a HALT",   halt_v);
     check32("suma_simple deja 89440 en 0x200",
-            simple.u_dmem.storage[W_RES], ESPERADO);
+            simple.u_mem_sys.u_mem.storage[W_RES], ESPERADO);
     check32("suma_vliw   deja 89440 en 0x200",
-            vliw.u_dmem.storage[W_RES],   ESPERADO);
+            vliw.u_mem_sys.u_mem.storage[W_RES],   ESPERADO);
     check("ninguna de las dos registro fallas",
           (psw_s[`PSW_EXC] === 1'b0) && (psw_v[`PSW_EXC] === 1'b0));
 
@@ -190,6 +222,15 @@ module tb_vliw;
     $display("         La diferencia no es el empaquetado, que lo tienen los");
     $display("         dos: es que el lazo desenrollado tiene trabajo");
     $display("         independiente con que llenar los huecos de la latencia.");
+    $display("");
+    $display("         Con la memoria ideal del Proyecto I: %0.2fx",
+             ACEL_MEMORIA_IDEAL);
+    $display("         Con la jerarquia de cache:           %0.2fx",
+             aceleracion);
+    $display("         La latencia de memoria se come %0.0f%% de la ventaja,",
+             100.0 * (ACEL_MEMORIA_IDEAL - aceleracion) /
+                     (ACEL_MEMORIA_IDEAL - 1.0));
+    $display("         porque las dos versiones hacen los mismos accesos.");
 
     check("la version VLIW es mas rapida", ciclos_v < ciclos_s);
     check($sformatf("y la aceleracion llega a %0.1fx", MINIMO),

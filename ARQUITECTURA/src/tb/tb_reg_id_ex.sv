@@ -78,9 +78,13 @@ module tb_reg_id_ex;
   logic                   s4_fault_out;
   logic [2:0]             s4_cause_out;
 
+  // Congelamiento por la jerarquia de memoria (Iteracion 3)
+  logic stall;
+
   reg_id_ex dut (
       .clk          (clk),
       .rst_n        (rst_n),
+      .stall        (stall),
       .valid_in     (valid_in),
       .pc_in        (pc_in),
       .s0_inst_in   (s0_in),
@@ -219,6 +223,7 @@ module tb_reg_id_ex;
 
   task automatic reiniciar();
     begin
+      stall = 1'b0;
       rst_n = 1'b0;
       @(posedge clk);
       #1 rst_n = 1'b1;
@@ -386,6 +391,69 @@ module tb_reg_id_ex;
       end
     end
     check_int("los 8 pasos de la secuencia salen a tiempo", malos, 0);
+
+    // ------------------------------------------------------------------------
+    $display("[stall] la frontera retiene el bundle completo");
+    // ------------------------------------------------------------------------
+    // Esta es la frontera mas ancha del pipeline: lleva los cuatro slots, los
+    // valores leidos del banco y el enlace de retorno. Durante un stall tiene
+    // que retenerlos TODOS, porque el bundle que esta en EX se vuelve a
+    // ejecutar ciclo tras ciclo con esas mismas entradas. Si alguno se
+    // actualizara, el bundle detenido cambiaria de contenido a mitad de la
+    // espera y ejecutaria algo que el programa nunca pidio.
+
+    reiniciar();
+    valid_in    = 1'b1;
+    pc_in       = 32'h0000_8000;
+    s0_in       = 32'hAAAA_0001;
+    s1_in       = 32'hBBBB_0002;
+    s2_in       = 32'hCCCC_0003;
+    s3_in       = 16'hDD04;
+    link_we_in  = 1'b1;
+    link_idx_in = 4'd7;
+    link_val_in = 32'hEEEE_0005;
+    rval_in[0]  = 32'hF000_0006;
+    pasar();
+
+    check32("tomo el slot 0", s0_out, 32'hAAAA_0001);
+    check32("tomo el enlace", link_val_out, 32'hEEEE_0005);
+
+    // Con el stall encendido se presenta un bundle COMPLETAMENTE distinto
+    stall       = 1'b1;
+    pc_in       = 32'h0000_9000;
+    s0_in       = 32'h1111_1111;
+    s1_in       = 32'h2222_2222;
+    s2_in       = 32'h3333_3333;
+    s3_in       = 16'h4444;
+    link_we_in  = 1'b0;
+    link_idx_in = 4'd1;
+    link_val_in = 32'h5555_5555;
+    rval_in[0]  = 32'h6666_6666;
+    repeat (5) pasar();
+
+    check32("retuvo el PC",        pc_out,       32'h0000_8000);
+    check32("retuvo el slot 0",    s0_out,       32'hAAAA_0001);
+    check32("retuvo el slot 1",    s1_out,       32'hBBBB_0002);
+    check32("retuvo el slot 2",    s2_out,       32'hCCCC_0003);
+    check_int("retuvo el slot 3",  s3_out,       16'hDD04);
+    check32("retuvo el valor leido", rval_out[0], 32'hF000_0006);
+    check_int("retuvo link_we",    link_we_out,  1'b1);
+    check32("retuvo link_val",     link_val_out, 32'hEEEE_0005);
+
+    // Al levantarse entra el bundle nuevo, entero
+    stall = 1'b0;
+    pasar();
+    check32("al levantarse entra el nuevo", s0_out, 32'h1111_1111);
+    check32("con su PC",                    pc_out, 32'h0000_9000);
+
+    // El reset manda sobre el stall
+    stall = 1'b1;
+    rst_n = 1'b0;
+    pasar();
+    check32("el reset gana sobre el stall", s0_out, 32'd0);
+    check_int("y limpia la validez",        valid_out, 1'b0);
+    rst_n = 1'b1;
+    stall = 1'b0;
 
 `ifdef FORCE_FAIL
     // ------------------------------------------------------------------------

@@ -122,6 +122,8 @@ module tb_credencial;
 
   integer i, c, malos, n_palabras;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_credencial.vcd");
@@ -134,10 +136,10 @@ module tb_credencial;
     // tiempo 0, asi que la carga va un paso despues para no competir con ellos.
     #1;
     $readmemh("../../tools/programas/cifrar_archivo.hex", dut.u_imem.storage);
-    $readmemh("../../tools/programas/archivo_prueba.hex", dut.u_dmem.storage);
+    $readmemh("../../tools/programas/archivo_prueba.hex", dut.u_mem_sys.u_mem.storage);
 
     for (i = 0; i < N_WORDS; i = i + 1)
-      original[i] = dut.u_dmem.storage[i];
+      original[i] = dut.u_mem_sys.u_mem.storage[i];
     n_palabras = 2 * original[W_BUF + 1];
 
     $display("=== tb_credencial: cifrar con la credencial equivocada ===");
@@ -153,6 +155,21 @@ module tb_credencial;
     end
     repeat (8) @(posedge clk);
     #1;
+
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(dut.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
 
     $display("  (se detuvo tras %0d ciclos, PSW = %08h)", c, psw);
     $display("");
@@ -175,7 +192,7 @@ module tb_credencial;
 
     malos = 0;
     for (i = 0; i < 2 + n_palabras; i = i + 1)
-      if (dut.u_dmem.storage[W_BUF + i] !== original[W_BUF + i])
+      if (dut.u_mem_sys.u_mem.storage[W_BUF + i] !== original[W_BUF + i])
         malos = malos + 1;
     check_int("el buffer quedo identico al original", malos, 0);
 
@@ -191,10 +208,10 @@ module tb_credencial;
     malos = 0;
     for (i = 0; i < N_WORDS; i = i + 1) begin
       if (!(i >= W_BUF + 2 && i < W_BUF + 2 + n_palabras)) begin
-        if (dut.u_dmem.storage[i] === 32'h1111_1111 ||
-            dut.u_dmem.storage[i] === 32'h2222_2222 ||
-            dut.u_dmem.storage[i] === 32'h3333_3333 ||
-            dut.u_dmem.storage[i] === 32'h4444_4444) malos = malos + 1;
+        if (dut.u_mem_sys.u_mem.storage[i] === 32'h1111_1111 ||
+            dut.u_mem_sys.u_mem.storage[i] === 32'h2222_2222 ||
+            dut.u_mem_sys.u_mem.storage[i] === 32'h3333_3333 ||
+            dut.u_mem_sys.u_mem.storage[i] === 32'h4444_4444) malos = malos + 1;
       end
     end
     check_int("ninguna subllave aparece en los 64 KB de datos", malos, 0);

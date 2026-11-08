@@ -1,0 +1,21 @@
+# Vivacidad: lo minimo que el analisis tiene que acertar.
+#
+# 'vive' se calcula y se devuelve.
+# 'muere' se calcula y nunca se lee.
+# 'cadena_a' y 'cadena_b' solo se alimentan entre si y mueren con 'muere':
+# son la prueba de que una cadena entera de calculos muertos cae de una vez.
+# El bloque despues del 'redde' no lo alcanza ninguna ejecucion.
+functio mezclar(a : integer, b : integer) -> integer {
+    varia vive     : integer = a + b;
+    varia muere    : integer = a * b;
+    varia cadena_a : integer = muere + 7;
+    varia cadena_b : integer = cadena_a * 2;
+
+    redde vive;
+
+    varia tras_el_redde : integer = 99;
+}
+
+functio principale() -> integer {
+    redde mezclar(3, 4);
+}

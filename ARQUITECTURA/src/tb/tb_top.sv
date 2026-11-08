@@ -80,6 +80,9 @@ module tb_top;
   logic [`XLEN-1:0]             psw_s, psw_i;
   logic [`NREGS-1:0][`XLEN-1:0] regs_s, regs_i;
 
+  // La jerarquia de memoria termino de escribir todo lo pendiente
+  logic drenada_s, drenada_i;
+
   top #(
       .NUM_BUNDLES (N_BUNDLES),
       .NUM_WORDS   (N_WORDS),
@@ -88,11 +91,12 @@ module tb_top;
       .SEC_LIMIT   (SEC_L),
       .ROT_SECRET  (SECRETO)
   ) dut (
-      .clk      (clk),
-      .rst_n    (rst_n),
-      .halted   (halted_s),
-      .psw      (psw_s),
-      .dbg_regs (regs_s)
+      .clk         (clk),
+      .rst_n       (rst_n),
+      .halted      (halted_s),
+      .psw         (psw_s),
+      .dbg_regs    (regs_s),
+      .mem_drenada (drenada_s)
   );
 
   // La misma configuracion pero arrancando en cero, fuera de [SEC_B, SEC_L]
@@ -104,11 +108,12 @@ module tb_top;
       .SEC_LIMIT   (SEC_L),
       .ROT_SECRET  (SECRETO)
   ) dut_fuera (
-      .clk      (clk),
-      .rst_n    (rst_n),
-      .halted   (halted_i),
-      .psw      (psw_i),
-      .dbg_regs (regs_i)
+      .clk         (clk),
+      .rst_n       (rst_n),
+      .halted      (halted_i),
+      .psw         (psw_i),
+      .dbg_regs    (regs_i),
+      .mem_drenada (drenada_i)
   );
 
   // ---------------------------------------------------------------------------
@@ -299,13 +304,13 @@ module tb_top;
 
   task automatic dato_s(input integer w, input logic [31:0] v);
     begin
-      dut.u_dmem.storage[w] = v;
+      dut.u_mem_sys.u_mem.storage[w] = v;
     end
   endtask
 
   task automatic dato_i(input integer w, input logic [31:0] v);
     begin
-      dut_fuera.u_dmem.storage[w] = v;
+      dut_fuera.u_mem_sys.u_mem.storage[w] = v;
     end
   endtask
 
@@ -339,6 +344,25 @@ module tb_top;
       #1;
       if (c >= tope)
         $display("  AVISO  el programa no se detuvo en %0d ciclos", tope);
+
+      // Y despues espera a que la jerarquia de memoria quede quieta.
+      //
+      // Desde la Iteracion 3 el procesador escribe en la cache y en un write
+      // buffer, no en la memoria. Cuando el programa ejecuta su HALT, sus
+      // ultimos stores pueden seguir viajando cientos de ciclos: cada linea
+      // que llega a memoria principal cuesta T_mem. Revisar la memoria sin
+      // esperar daria por perdidos stores que simplemente no habian llegado.
+      //
+      // Es una espera del ARNES, no del procesador: esos ciclos no se cuentan
+      // como tiempo de ejecucion y no entran en ninguna metrica.
+      c = 0;
+      while (!drenada_s && c < 100000) begin
+        @(posedge clk);
+        c = c + 1;
+      end
+      #1;
+      if (c >= 100000)
+        $display("  AVISO  la jerarquia de memoria no termino de drenar");
     end
   endtask
 
@@ -459,7 +483,7 @@ module tb_top;
     check32("lhu extiende con ceros",            regs_s[5], 32'h0000_8899);
     check32("lh extiende con signo",             regs_s[6], 32'hFFFF_8899);
     check32("sw y lw de vuelta",                 regs_s[7], 32'h8899_AABB);
-    check32("sb escribio solo su carril",        dut.u_dmem.storage[16], 32'h0000_00BB);
+    check32("sb escribio solo su carril",        dut.u_mem_sys.u_mem.storage[16], 32'h0000_00BB);
     check32("lw.inc trajo el dato",              regs_s[8], 32'h8899_AABB);
     check32("y dejo la base incrementada",       regs_s[1], 32'h0000_0024);
     check1 ("sin fallas en el PSW",              psw_s[`PSW_EXC], 1'b0);
@@ -566,16 +590,16 @@ module tb_top;
     check1 ("sin fallas en el PSW",      psw_s[`PSW_EXC], 1'b0);
     check32("la mitad L cifrada",        regs_s[10], CIFRA_L);
     check32("la mitad R cifrada",        regs_s[11], CIFRA_R);
-    check32("L guardada en memoria",     dut.u_dmem.storage[16], CIFRA_L);
-    check32("R guardada en memoria",     dut.u_dmem.storage[17], CIFRA_R);
+    check32("L guardada en memoria",     dut.u_mem_sys.u_mem.storage[16], CIFRA_L);
+    check32("R guardada en memoria",     dut.u_mem_sys.u_mem.storage[17], CIFRA_R);
 
     // Aislamiento: ninguna subllave puede haber quedado visible. Es el caso 6
     // del enunciado, y aqui se revisa la memoria entera y los 16 registros.
     tests_run = tests_run + 1;
     i = 0;
     for (b = 0; b < N_WORDS; b = b + 1)
-      if (dut.u_dmem.storage[b] === LLAVE0 || dut.u_dmem.storage[b] === LLAVE1 ||
-          dut.u_dmem.storage[b] === LLAVE2 || dut.u_dmem.storage[b] === LLAVE3)
+      if (dut.u_mem_sys.u_mem.storage[b] === LLAVE0 || dut.u_mem_sys.u_mem.storage[b] === LLAVE1 ||
+          dut.u_mem_sys.u_mem.storage[b] === LLAVE2 || dut.u_mem_sys.u_mem.storage[b] === LLAVE3)
         if (b > 7) i = i + 1;    // 4..7 son las palabras que el programa cargo
     if (i != 0) begin
       tests_failed = tests_failed + 1;

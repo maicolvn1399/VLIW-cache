@@ -158,6 +158,8 @@ module tb_descifrado;
            w === llave[63:32]  || w === llave[31:0];
   endfunction
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_descifrado.vcd");
@@ -174,10 +176,10 @@ module tb_descifrado;
     // tiempo 0, asi que la carga va un paso despues para no competir con ellos.
     #1;
     $readmemh(prog_descifrar,         des.u_imem.storage);
-    $readmemh("contenedor_libre.hex", des.u_dmem.storage);
+    $readmemh("contenedor_libre.hex", des.u_mem_sys.u_mem.storage);
 
-    n_bytes    = des.u_dmem.storage[W_BUF];
-    n_bloques  = des.u_dmem.storage[W_BUF + 1];
+    n_bytes    = des.u_mem_sys.u_mem.storage[W_BUF];
+    n_bloques  = des.u_mem_sys.u_mem.storage[W_BUF + 1];
     n_palabras = 2 * n_bloques;
     limite     = CICLOS_BASE + CICLOS_POR_BLOQUE * n_bloques;
 
@@ -212,6 +214,21 @@ module tb_descifrado;
     repeat (8) @(posedge clk);
     #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(des.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
     $display("  (se detuvo tras %0d ciclos)", c);
 
     check1("el procesador que descifra se detuvo", halted, 1'b1);
@@ -220,12 +237,12 @@ module tb_descifrado;
     diagnostico("descifra", psw);
 
     check_int("la cabecera sobrevivio, bytes",
-              des.u_dmem.storage[W_BUF], n_bytes);
+              des.u_mem_sys.u_mem.storage[W_BUF], n_bytes);
     check_int("y la cantidad de bloques",
-              des.u_dmem.storage[W_BUF + 1], n_bloques);
+              des.u_mem_sys.u_mem.storage[W_BUF + 1], n_bloques);
 
     // Lo que extract_data.py convierte de vuelta en archivo
-    $writememh("descifrado_libre.hex", des.u_dmem.storage);
+    $writememh("descifrado_libre.hex", des.u_mem_sys.u_mem.storage);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -240,7 +257,7 @@ module tb_descifrado;
     malos = 0;
     for (i = 0; i < N_WORDS; i = i + 1) begin
       if (!(i >= W_BUF + 2 && i < W_BUF + 2 + n_palabras)) begin
-        if (es_subllave(des.u_dmem.storage[i])) malos = malos + 1;
+        if (es_subllave(des.u_mem_sys.u_mem.storage[i])) malos = malos + 1;
       end
     end
     check_int("ninguna subllave aparece en los 64 KB de datos", malos, 0);

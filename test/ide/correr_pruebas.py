@@ -526,6 +526,283 @@ def prueba_bloques():
               r.get("ok") is False and r.get("motivo"), str(r)[:160])
 
 
+# ------------------------------- 7. vivacidad y eliminacion de codigo muerto
+
+def novac(*argumentos):
+    """Corre el compilador y devuelve (salida, errores, codigo)."""
+    r = subprocess.run([NOVAC] + list(argumentos),
+                       capture_output=True, text=True, timeout=120, cwd=RAIZ)
+    return r.stdout, r.stderr, r.returncode
+
+
+def cuerpo_tac(texto, funcion):
+    """Las lineas de tres direcciones de una funcion, ya recortadas."""
+    lineas = []
+    dentro = False
+    for l in texto.splitlines():
+        if l.startswith(f"functio {funcion}:"):
+            dentro = True
+            continue
+        if dentro and l.startswith("fin "):
+            break
+        if dentro and l.strip():
+            lineas.append(l.strip())
+    return lineas
+
+
+def prueba_vivacidad():
+    print("\n[7] Vivacidad y eliminacion de codigo muerto")
+
+    basica = os.path.join(AQUI, "viv_basica.nv")
+    efectos = os.path.join(AQUI, "viv_efectos.nv")
+
+    # --- Los conjuntos del analisis ---
+    r = ide("bloques", basica)
+    comprobar("el IDE entrega los conjuntos de vivacidad",
+              r.get("ok") and "vivo_ent" in r["funciones"][0]["lista"][0],
+              str(r)[:160])
+    if not r.get("ok"):
+        return
+
+    fn = {f["nombre"]: f for f in r["funciones"]}["mezclar"]
+    b0 = fn["lista"][0]
+
+    # Un parametro llega vivo: su valor viene de fuera de la funcion.
+    comprobar("los parametros estan vivos a la entrada de la funcion",
+              set(b0["vivo_ent"]) == {"a", "b"}, str(b0["vivo_ent"]))
+
+    # Al retornar, el marco desaparece: no sobrevive ningun local ni temporal.
+    salidas = [x for x in fn["lista"] if x["fin"] == "retorno" and x["alcanzable"]]
+    comprobar("a la salida de un retorno no queda vivo ningun local",
+              salidas and all(x["vivo_sal"] == [] for x in salidas),
+              str([x["vivo_sal"] for x in salidas]))
+
+    # USO son los nombres leidos antes de escribirlos; DEF los escritos antes
+    # de leerlos. 'a' y 'b' solo se leen, asi que no pueden estar en DEF.
+    comprobar("un nombre que solo se lee no entra en DEF",
+              not ({"a", "b"} & set(b0["def"])), str(b0["def"]))
+
+    # El punto fijo existe y se alcanza: la cuenta tiene que ser util.
+    comprobar("el analisis converge en un numero razonable de pasadas",
+              1 <= fn["iteraciones"] <= 20, str(fn.get("iteraciones")))
+
+    # --- Lo que se marca y lo que no ---
+    marcadas = {c["texto"] for x in fn["lista"] for c in x["codigo"] if c["muerta"]}
+    comprobar("la cadena de calculos muertos se marca entera",
+              all(any(n in t for t in marcadas)
+                  for n in ("muere", "cadena_a", "cadena_b")),
+              str(sorted(marcadas)))
+    comprobar("el valor que se devuelve nunca se marca como muerto",
+              not any("vive =" in t for t in marcadas), str(sorted(marcadas)))
+
+    # --- Lo que elimina -O1 ---
+    sin_opt, _, _ = novac("--ir", basica)
+    con_opt, _, _ = novac("--ir", "-O1", basica)
+    antes = cuerpo_tac(sin_opt, "mezclar")
+    despues = cuerpo_tac(con_opt, "mezclar")
+
+    comprobar("-O1 reduce el codigo intermedio", len(despues) < len(antes),
+              f"{len(antes)} -> {len(despues)}")
+    comprobar("-O1 conserva el calculo que se usa",
+              any("vive = " in l for l in despues), str(despues))
+    comprobar("-O1 elimina la cadena muerta entera",
+              not any(n in l for l in despues
+                      for n in ("muere", "cadena_a", "cadena_b")),
+              str(despues))
+    comprobar("-O1 elimina el bloque inalcanzable",
+              not any("tras_el_redde" in l for l in despues), str(despues))
+
+    # Una sola ronda deberia bastar para una cadena lineal: si hicieran falta
+    # tantas rondas como eslabones, el recorrido hacia atras estaria mal.
+    met, _, _ = novac("--metricas", "-O1", basica, "-o", os.devnull)
+    rondas = re.search(r"rondas hasta el punto fijo: *(\d+)", met)
+    comprobar("la cadena muerta cae sin una ronda por eslabon",
+              rondas and int(rondas.group(1)) <= 3,
+              rondas.group(1) if rondas else met[:160])
+
+    # --- Lo que NO se puede eliminar ---
+    con_opt, _, _ = novac("--ir", "-O1", efectos)
+    arr = cuerpo_tac(con_opt, "arriesgar")
+
+    comprobar("una division con destino muerto no se elimina (aborta con 136)",
+              any("/" in l for l in arr), str(arr))
+    comprobar("la verificacion de rango no se elimina (aborta con 134)",
+              any(l.startswith("check") for l in arr), str(arr))
+    comprobar("una llamada con resultado sin usar se conserva",
+              any("call ruidosa" in l for l in arr), str(arr))
+    comprobar("pero su destino se descarta",
+              not any(re.match(r"t\d+ = call ruidosa", l) for l in arr),
+              str(arr))
+    comprobar("el efecto de la funcion llamada sobrevive",
+              any("call scribe" in l or "scribe" in l
+                  for l in cuerpo_tac(con_opt, "ruidosa") + arr)
+              or "scribe" in con_opt, con_opt[:200])
+
+    # Un arreglo cuya direccion se toma con & escapa: nadie puede darlo por
+    # muerto, porque la funcion llamada puede leerlo o escribirlo.
+    pri = cuerpo_tac(con_opt, "principale")
+    comprobar("un arreglo que escapa por & conserva sus escrituras",
+              any("v[" in l for l in pri), str(pri))
+
+    # --- Invariantes sobre todo el corpus ---
+    fuentes = sorted(glob.glob(os.path.join(RAIZ, "test", "ejemplos", "*.nv")) +
+                     glob.glob(os.path.join(RAIZ, "test", "ejecucion", "*.nv")))
+    crecieron, rotos, fallos = [], [], []
+
+    for f in fuentes:
+        nombre = os.path.basename(f)
+        a, _, rc_a = novac("--metricas", f, "-o", os.devnull)
+        b, _, rc_b = novac("--metricas", "-O1", f, "-o", os.devnull)
+        if rc_a != 0 or rc_b != 0:
+            continue
+        n_a = re.search(r"instrucciones de tres direcciones: *(\d+)", a)
+        n_b = re.search(r"instrucciones de tres direcciones: *(\d+)", b)
+        if not n_a or not n_b:
+            continue
+        if int(n_b.group(1)) > int(n_a.group(1)):
+            crecieron.append(nombre)
+
+        # Compilar optimizado tiene que seguir produciendo un binario valido.
+        _, err, rc = novac("-O1", f, "-o", os.path.join(RAIZ, ".tmp_opt.nvx"))
+        if rc != 0:
+            fallos.append(f"{nombre}: {err.strip()[:60]}")
+
+        # Invariante fuerte: en el bloque de entrada de cada funcion solo
+        # pueden llegar vivos los parametros y los nombres que vienen de fuera.
+        # Si un local o un temporal esta vivo ahi, se lee algo que nadie
+        # definio, que es exactamente lo que rompe una eliminacion mal hecha.
+        v = ide("bloques", f)
+        if not v.get("ok"):
+            continue
+        for g in v["funciones"]:
+            entrada = g["lista"][0]
+            vivos = [n for n in entrada["vivo_ent"] if re.fullmatch(r"t\d+", n)]
+            if vivos:
+                rotos.append(f"{nombre}:{g['nombre']} {vivos}")
+
+    if os.path.isfile(os.path.join(RAIZ, ".tmp_opt.nvx")):
+        os.remove(os.path.join(RAIZ, ".tmp_opt.nvx"))
+
+    comprobar("-O1 nunca aumenta el numero de instrucciones",
+              not crecieron, ", ".join(crecieron))
+    comprobar("ningun temporal llega vivo a la entrada de una funcion",
+              not rotos, "; ".join(rotos[:4]))
+    comprobar("todo el corpus compila con -O1", not fallos, "; ".join(fallos[:3]))
+
+    # --- La tabla de simbolos describe el programa que de verdad se genera ---
+    #
+    # --sym mide el marco de cada funcion con un segundo recorrido de la fase 4
+    # sobre una copia del codigo intermedio. Si esa copia no se optimizara, la
+    # tabla diria direcciones de un programa distinto del que esta en el
+    # binario. Al quitar instrucciones, los temporales viven menos y el marco
+    # tiene que encoger.
+    def marco_de(texto, funcion):
+        m = re.search(rf"^{funcion}\s+functio.*?marco (\d+) B", texto, re.M)
+        return int(m.group(1)) if m else None
+
+    demo = os.path.join(AQUI, "demo_iteracion3.nv")
+    s0, _, _ = novac("--sym", demo)
+    s1, _, _ = novac("--sym", "-O1", demo)
+    m0, m1 = marco_de(s0, "con_sobras"), marco_de(s1, "con_sobras")
+    comprobar("el marco encoge al optimizar: --sym mide el codigo optimizado",
+              m0 is not None and m1 is not None and m1 < m0, f"{m0} -> {m1}")
+
+    # Pero el desplazamiento dentro del marco no cambia: lo calcula la fase 3 y
+    # la optimizacion no toca declaraciones.
+    def offset_de(texto, variable):
+        m = re.search(rf"^{variable}\s+varia.*?= (r14\+\d+)", texto, re.M)
+        return m.group(1) if m else None
+
+    comprobar("el desplazamiento relativo a r14 no cambia al optimizar",
+              offset_de(s0, "util") is not None and
+              offset_de(s0, "util") == offset_de(s1, "util"),
+              f"{offset_de(s0, 'util')} vs {offset_de(s1, 'util')}")
+
+    # --- Dos confirmaciones que da la propia tabla de simbolos ---
+    #
+    # 1. La rutina __nova_div32 solo se emite si el programa tiene alguna
+    #    division (codegen.c marca 'usa_div' recorriendo el TAC). Si la
+    #    eliminacion hubiera borrado la division muerta de 'intocables', esa
+    #    etiqueta y las ocho __dv_* desapareceran de la tabla. Que sigan ahi es
+    #    una comprobacion INDEPENDIENTE de que la division sobrevivio, visible
+    #    sin mirar el codigo intermedio.
+    def etiquetas_division(texto):
+        return len(re.findall(r"^(?:__nova_div32|__dv_\w+)\s", texto, re.M))
+
+    sin_div = os.path.join(AQUI, "cfg_recto.nv")
+    sd, _, _ = novac("--sym", sin_div)
+    comprobar("sin division en el fuente no se emite __nova_div32",
+              etiquetas_division(sd) == 0, str(etiquetas_division(sd)))
+    comprobar("la rutina de division sigue emitida con -O1",
+              etiquetas_division(s1) > 0 and
+              etiquetas_division(s1) == etiquetas_division(s0),
+              f"{etiquetas_division(s0)} -> {etiquetas_division(s1)}")
+
+    # 2. La tabla de etiquetas y el contador de bundles son dos caminos
+    #    distintos -- uno sale de la relajacion de saltos, el otro del emisor --
+    #    y tienen que dar el mismo ahorro. Si no coincidieran, una de las dos
+    #    estaria describiendo un programa que no es.
+    def bundle_de(texto, etq):
+        m = re.search(rf"^{etq}\s+0x\w+\s+(\d+)\s", texto, re.M)
+        return int(m.group(1)) if m else None
+
+    def bundles_emitidos(texto):
+        m = re.search(r"bundles emitidos: *(\d+)", texto)
+        return int(m.group(1)) if m else None
+
+    e0, e1 = bundle_de(s0, "__scribe_int"), bundle_de(s1, "__scribe_int")
+    q0, _, _ = novac("--metricas", demo, "-o", os.devnull)
+    q1, _, _ = novac("--metricas", "-O1", demo, "-o", os.devnull)
+    b0, b1 = bundles_emitidos(q0), bundles_emitidos(q1)
+    comprobar("el corrimiento de la ultima etiqueta == los bundles ahorrados",
+              None not in (e0, e1, b0, b1) and (e0 - e1) == (b0 - b1),
+              f"etiqueta {e0}->{e1} ({(e0 or 0)-(e1 or 0)}), "
+              f"bundles {b0}->{b1} ({(b0 or 0)-(b1 or 0)})")
+
+    # --- W010 llega al editor, no solo a la salida de la compilacion ---
+    d = ide("diagnosticar", basica)
+    w010 = [x for x in d.get("diagnosticos", []) if x.get("codigo") == "W010"]
+    comprobar("una asignacion muerta se subraya mientras se escribe",
+              len(w010) >= 3, str(len(w010)))
+    comprobar("W010 marca el nombre de la variable, no toda la linea",
+              all(x.get("largo", 0) > 0 and x.get("columna", 0) > 0
+                  for x in w010), str(w010[:1]))
+
+    # W001 y W010 contestan preguntas distintas y no se implican:
+    #   W001 (fase 3)  ¿alguien MENCIONA este nombre?
+    #   W010 (fase 6)  ¿el valor que se guarda aqui LLEGA A LEERSE?
+    # 'sobra_1' se menciona -- la linea siguiente la lee -- asi que no lleva
+    # W001, pero su valor igual esta muerto porque la cadena entera lo esta.
+    # 'inalcanzable' es al reves: no se menciona, pero vive en un bloque
+    # inalcanzable, asi que W010 no lo reporta (ya lo cubre W003).
+    d = ide("diagnosticar", demo)
+    por_codigo = {}
+    for x in d.get("diagnosticos", []):
+        for n in ("sobra_1", "inalcanzable", "division"):
+            if f"'{n}'" in x.get("mensaje", ""):
+                por_codigo.setdefault(n, set()).add(x.get("codigo"))
+
+    comprobar("W010 encuentra una muerta que W001 no ve (cadena de usos)",
+              "W010" in por_codigo.get("sobra_1", set()) and
+              "W001" not in por_codigo.get("sobra_1", set()),
+              str(por_codigo.get("sobra_1")))
+    comprobar("no se duplica W010 sobre un bloque inalcanzable",
+              "W010" not in por_codigo.get("inalcanzable", set()),
+              str(por_codigo.get("inalcanzable")))
+    comprobar("las dos coinciden cuando ni se menciona ni se lee",
+              {"W001", "W010"} <= por_codigo.get("division", set()),
+              str(por_codigo.get("division")))
+
+    # --- El IDE y el compilador dicen lo mismo ---
+    v = ide("bloques", basica)
+    sobran_ide = v["resumen"]["sobran"]
+    met, _, _ = novac("--metricas", "-O1", basica, "-o", os.devnull)
+    quitadas = re.search(r"eliminadas: *(\d+)", met)
+    comprobar("el IDE anuncia lo mismo que -O1 elimina",
+              quitadas and int(quitadas.group(1)) == sobran_ide,
+              f"IDE={sobran_ide} novac={quitadas.group(1) if quitadas else '?'}")
+
+
 # ---------------------------------------------------------------- 6. clones
 
 def prueba_clones():
@@ -619,6 +896,7 @@ def main():
     prueba_completado()
     prueba_bloques()
     prueba_clones()
+    prueba_vivacidad()
 
     print("=" * 62)
     if fallidas:

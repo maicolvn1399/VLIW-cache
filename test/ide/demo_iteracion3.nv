@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Demostracion de la Iteracion 3: vivacidad y eliminacion de codigo muerto.
+#
+# Cada funcion de este archivo existe para ensenar una cosa distinta en el IDE.
+# Compilelo con la casilla -O1 apagada y encendida para comparar.
+# ---------------------------------------------------------------------------
+
+# 1. UN LAZO. Sirve para ver los conjuntos del analisis.
+#    En la cabeza del lazo, 'suma', 'i' y 'tope' estan vivos a la entrada Y a
+#    la salida: el lazo vuelve a leerlos. Converge en 3 pasadas.
+functio acumular(tope : integer) -> integer {
+    varia suma : integer = 0;
+    varia i    : integer = 1;
+
+    dum (i <= tope) {
+        suma = suma + i;
+        i = i + 1;
+    }
+    redde suma;
+}
+
+# 2. UNA CADENA MUERTA. Los tres calculos solo se alimentan entre si y nadie
+#    lee el ultimo. Se van los tres de una sola pasada.
+#    Despues del 'redde' hay un bloque que no alcanza ninguna ejecucion.
+functio con_sobras(a : integer, b : integer) -> integer {
+    varia util    : integer = a + b;
+    varia sobra_1 : integer = a * b;
+    varia sobra_2 : integer = sobra_1 + 7;
+    varia sobra_3 : integer = sobra_2 * 2;
+
+    redde util;
+
+    varia inalcanzable : integer = 99;
+}
+
+# 3. LO QUE NO SE PUEDE ELIMINAR. Los tres destinos estan muertos, pero
+#    ninguna de las tres instrucciones se puede borrar:
+#      division   aborta con el codigo 136 si el divisor es cero
+#      indexado   la verificacion de rango aborta con el codigo 134
+#      llamada    'con_sobras' se queda; lo que se descarta es su destino
+functio intocables(d : integer, v : integer[]) -> integer {
+    varia division : integer = 1000 / d;
+    varia indexado : integer = v[d];
+    varia llamada  : integer = con_sobras(3, 4);
+
+    redde 0;
+}
+
+functio principale() -> integer {
+    varia v : integer[8];
+    v[0] = 11;
+    v[1] = 22;
+
+    scribe(acumular(10));
+    scribe(intocables(2, v));
+
+    redde acumular(10);
+}

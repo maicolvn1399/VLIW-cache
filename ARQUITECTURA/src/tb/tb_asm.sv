@@ -136,6 +136,8 @@ module tb_asm;
 
   integer ciclos;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_asm.vcd");
@@ -160,6 +162,21 @@ module tb_asm;
     repeat (8) @(posedge clk);
     #1;
 
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(dut.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
+
     $display("");
     $display("  el programa se detuvo tras %0d ciclos", ciclos);
     $display("");
@@ -174,12 +191,12 @@ module tb_asm;
     check32("la mitad R cifrada, en R11", regs[11], CIFRA_R);
 
     // Y guardada en memoria por los dos SW del final
-    check32("la mitad L guardada en 0x40", dut.u_dmem.storage[16], CIFRA_L);
-    check32("la mitad R guardada en 0x44", dut.u_dmem.storage[17], CIFRA_R);
+    check32("la mitad L guardada en 0x40", dut.u_mem_sys.u_mem.storage[16], CIFRA_L);
+    check32("la mitad R guardada en 0x44", dut.u_mem_sys.u_mem.storage[17], CIFRA_R);
 
     // El bloque claro tiene que seguir donde estaba: el programa no lo pisa
-    check32("el bloque claro quedo intacto, L", dut.u_dmem.storage[8], CLARO_L);
-    check32("el bloque claro quedo intacto, R", dut.u_dmem.storage[9], CLARO_R);
+    check32("el bloque claro quedo intacto, L", dut.u_mem_sys.u_mem.storage[8], CLARO_L);
+    check32("el bloque claro quedo intacto, R", dut.u_mem_sys.u_mem.storage[9], CLARO_R);
 
     // ------------------------------------------------------------------------
     // El estado de la boveda y del PSW
@@ -207,8 +224,8 @@ module tb_asm;
     // ahi, encontrar una subllave significaria que la boveda se filtro.
 
     tests_run = tests_run + 1;
-    if (dut.u_dmem.storage[16] === 32'h1111_1111 ||
-        dut.u_dmem.storage[17] === 32'h1111_1111 ||
+    if (dut.u_mem_sys.u_mem.storage[16] === 32'h1111_1111 ||
+        dut.u_mem_sys.u_mem.storage[17] === 32'h1111_1111 ||
         regs[1] === 32'h1111_1111) begin
       tests_failed = tests_failed + 1;
       $display("  FALLA  una palabra de la llave aparecio fuera de su sitio");

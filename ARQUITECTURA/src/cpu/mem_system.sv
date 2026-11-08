@@ -61,8 +61,17 @@
 //
 // En simulacion los testbenches cargan la memoria por referencia jerarquica
 // (dut.u_mem.storage), que no depende ni de archivos ni de rutas relativas.
+// Desde la Iteracion 3 la memoria principal es la UNICA memoria de datos del
+// sistema: la dmem ideal del Proyecto I desaparecio y la cache L1-D se llena
+// desde aqui. La imagen de datos del programa, que antes se cargaba en la
+// dmem, se carga ahora en este arreglo, asi que el archivo por defecto es el
+// mismo que ya usaba el makefile y nada de la cadena de compilacion cambia.
 `ifndef CERBERO_MAINMEM_FILE
-  `define CERBERO_MAINMEM_FILE ""
+  `ifdef CERBERO_DMEM_FILE
+    `define CERBERO_MAINMEM_FILE `CERBERO_DMEM_FILE
+  `else
+    `define CERBERO_MAINMEM_FILE ""
+  `endif
 `endif
 
 module mem_system #(
@@ -83,7 +92,7 @@ module mem_system #(
     input  logic                     ev_push,
     input  logic [`MEM_LIDX_W-1:0]   ev_linea,
     input  logic [`LINE_W-1:0]       ev_datos,
-    input  logic [`LINE_WORDS-1:0]   ev_mascara,
+    input  logic [`LINE_MASK_W-1:0]   ev_mascara,
     output logic                     ev_lleno,
 
     // ---- Observacion ----------------------------------------------------------
@@ -110,8 +119,9 @@ module mem_system #(
   logic                    ev_head_valido;
   logic [`MEM_LIDX_W-1:0]  ev_head_linea;
   logic [`LINE_W-1:0]      ev_head_datos;
-  logic [`LINE_WORDS-1:0]  ev_head_mascara;
+  logic [`LINE_MASK_W-1:0]  ev_head_mascara;
   logic                    ev_head_ack;
+  logic                    ev_drenando;
 
   eviction_buffer #(.ENTRIES (EV_ENTRIES)) u_evict (
       .clk            (clk),
@@ -125,6 +135,7 @@ module mem_system #(
       .head_datos     (ev_head_datos),
       .head_mascara   (ev_head_mascara),
       .head_ack       (ev_head_ack),
+      .head_ocupada   (ev_drenando),
       // La consulta de conflicto es siempre la linea que se esta pidiendo: si
       // esa linea tiene escrituras pendientes, leerla de memoria daria el valor
       // viejo.
@@ -139,6 +150,7 @@ module mem_system #(
 
   logic [`XLEN-1:0] mem_addr, mem_wdata, mem_rdata;
   logic             mem_we;
+  logic [3:0]       mem_be;
 
   mem_controller u_ctrl (
       .clk            (clk),
@@ -157,10 +169,12 @@ module mem_system #(
       .ev_ack         (ev_head_ack),
       .mem_addr       (mem_addr),
       .mem_we         (mem_we),
+      .mem_be         (mem_be),
       .mem_wdata      (mem_wdata),
       .mem_rdata      (mem_rdata),
       .inicia_lectura (inicia_lectura),
-      .inicia_drenado (inicia_drenado)
+      .inicia_drenado (inicia_drenado),
+      .drenando       (ev_drenando)
   );
 
   // ---- Memoria ---------------------------------------------------------------
@@ -174,6 +188,7 @@ module mem_system #(
       .tick  (tick),
       .addr  (mem_addr),
       .we    (mem_we),
+      .be    (mem_be),
       .wdata (mem_wdata),
       .rdata (mem_rdata)
   );

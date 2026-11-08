@@ -308,6 +308,29 @@ int codegen_etiquetas(const CodegenEtiqueta **out) {
     return n_etq_copia;
 }
 
+/*
+ * Instantanea del tamano del programa, tomada junto con la de etiquetas y por
+ * la misma razon: despues de liberar_todo() ya no hay bundles que contar.
+ */
+static CodegenEstadisticas estad_copia;
+
+static void guardar_estadisticas(void) {
+    memset(&estad_copia, 0, sizeof(estad_copia));
+    estad_copia.bundles = n_bundles;
+    for (int b = 0; b < n_bundles; b++) {
+        int usados = 0;
+        for (int s = 0; s < 5; s++)
+            if (prog[b].s[s] != NULL) usados++;
+        estad_copia.slots_usados += usados;
+        if (usados == 0) estad_copia.bundles_vacios++;
+    }
+}
+
+int codegen_estadisticas(CodegenEstadisticas *out) {
+    if (out != NULL) *out = estad_copia;
+    return estad_copia.bundles;
+}
+
 static int buscar_etiqueta(const char *nombre) {
     for (int i = 0; i < n_etqs; i++)
         if (strcmp(etqs[i].nombre, nombre) == 0) return etqs[i].bundle;
@@ -1814,6 +1837,7 @@ bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
         /* Antes de liberar: la tabla de saltos resueltos se guarda aparte. */
         guardar_etiquetas();
     }
+    guardar_estadisticas();
     liberar_todo();
     return ok;
 }
@@ -1839,6 +1863,7 @@ bool codegen_generate_vliw(TACList *tac, SymbolTable *st, FILE *out) {
     imprimir_codigo_texto();
     imprimir_tabla_etiquetas();
     fprintf(out, "\n// fin del programa\n");
+    guardar_estadisticas();
     liberar_todo();
     return ok;
 }
@@ -2252,13 +2277,15 @@ bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out) {
     sal = NULL;
     bool ok = construir_programa(tac);
     if (!ok) {
-        liberar_todo();
+        guardar_estadisticas();
+    liberar_todo();
         return false;
     }
     if (buscar_etiqueta("__inicio") < 0) {
         diag_error("E405", 0, 1, 1,
                    "no hay 'principale': no se pueden mostrar paquetes ejecutables");
-        liberar_todo();
+        guardar_estadisticas();
+    liberar_todo();
         return false;
     }
 
@@ -2285,6 +2312,7 @@ bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out) {
         fputc('\n', out);
     }
     ok = !hubo_error && diag_errores() == 0 && !ferror(out);
+    guardar_estadisticas();
     liberar_todo();
     return ok;
 }
@@ -2307,7 +2335,8 @@ bool codegen_emitir_binario(TACList *tac, SymbolTable *st, FILE *out) {
         diag_error("E405", 0, 1, 1,
                    "no hay 'principale': un modulo de biblioteca no puede ser "
                    "el punto de entrada de un ejecutable");
-        liberar_todo();
+        guardar_estadisticas();
+    liberar_todo();
         return false;
     }
 
@@ -2358,6 +2387,7 @@ bool codegen_emitir_binario(TACList *tac, SymbolTable *st, FILE *out) {
 
     free(codigo);
     bool limpio = ok && !hubo_error;
+    guardar_estadisticas();
     liberar_todo();
     return limpio;
 }

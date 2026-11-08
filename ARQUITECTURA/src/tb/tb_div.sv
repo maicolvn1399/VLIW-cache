@@ -132,8 +132,8 @@ module tb_div;
                       input logic [`XLEN-1:0] q,
                       input logic [`XLEN-1:0] r);
     begin
-      check32({nombre, ", cociente"}, dut.u_dmem.storage[W_RES + 2*i],     q);
-      check32({nombre, ", residuo "}, dut.u_dmem.storage[W_RES + 2*i + 1], r);
+      check32({nombre, ", cociente"}, dut.u_mem_sys.u_mem.storage[W_RES + 2*i],     q);
+      check32({nombre, ", residuo "}, dut.u_mem_sys.u_mem.storage[W_RES + 2*i + 1], r);
     end
   endtask
 
@@ -142,6 +142,8 @@ module tb_div;
   // ---------------------------------------------------------------------------
 
   integer ciclos;
+
+  integer guarda_drenado;
 
   initial begin
     if ($test$plusargs("VCD")) begin
@@ -163,6 +165,21 @@ module tb_div;
     end
     repeat (8) @(posedge clk);
     #1;
+
+      // Y espera a que la jerarquia de memoria termine de escribir.
+      //
+      // Desde la Iteracion 3 un store del programa no llega a la memoria
+      // principal cuando se ejecuta: pasa por la cache, por el write buffer y
+      // por el eviction buffer, y cada linea cuesta T_mem en el ultimo tramo.
+      // Revisar la memoria sin esperar daria por perdidos stores que
+      // simplemente seguian en camino. Son ciclos del ARNES: no se cuentan como
+      // tiempo de ejecucion ni entran en ninguna metrica.
+      guarda_drenado = 0;
+      while (!(dut.mem_drenada) && guarda_drenado < 200000) begin
+        @(posedge clk);
+        guarda_drenado = guarda_drenado + 1;
+      end
+      #1;
 
     $display("");
     $display("  el programa se detuvo tras %0d ciclos, o sea unos %0d por",

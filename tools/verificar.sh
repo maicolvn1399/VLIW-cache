@@ -15,6 +15,11 @@
 
 NOVAC=./novac
 SOLO=${1:-}
+# Banderas extra para el compilador. 'OPT=-O1 sh tools/verificar.sh 12' hace
+# que el contraste se haga sobre el codigo OPTIMIZADO: el ensamblador
+# independiente del equipo de CE4301 tiene que seguir aceptandolo y producir
+# exactamente los mismos bits que nuestro binario.
+OPT=${OPT:-}
 T=${TMPDIR:-/tmp}/nova_verif_$$
 mkdir -p "$T"
 trap 'rm -rf "$T"' 0 2 15
@@ -257,7 +262,7 @@ if bloque 12 "Contraste con el ensamblador de CERBERO"; then
         for f in test/factorial.nv test/ejemplos/*.nv test/ejecucion/*.nv; do
             [ -f "$f" ] || continue
             n=$(basename "$f" .nv)
-            $NOVAC -s "$f" -o "$T/c.nvx" > "$T/c.s" 2>/dev/null || continue
+            $NOVAC $OPT -s "$f" -o "$T/c.nvx" > "$T/c.s" 2>/dev/null || continue
             if ! python3 "$ASM" "$T/c.s" -o "$T/c.hex" > "$T/c.err" 2>&1; then
                 case "$(cat "$T/c.err")" in
                     *'inmediato mal formado'*'$'*)
@@ -269,7 +274,7 @@ if bloque 12 "Contraste con el ensamblador de CERBERO"; then
                 esac
                 continue
             fi
-            $NOVAC "$f" -o "$T/c.bin" 2>/dev/null || continue
+            $NOVAC $OPT "$f" -o "$T/c.bin" 2>/dev/null || continue
             if python3 - "$T/c.bin" "$T/c.hex" <<'PY'
 import sys
 d = open(sys.argv[1], 'rb').read()

@@ -83,14 +83,15 @@ module eviction_buffer #(
     input  logic                     push,
     input  logic [`MEM_LIDX_W-1:0]   push_linea,
     input  logic [`LINE_W-1:0]       push_datos,
-    input  logic [`LINE_WORDS-1:0]   push_mascara,
+    input  logic [`LINE_MASK_W-1:0]   push_mascara,
 
     // ---- Drenado: hacia el controlador de memoria ---------------------------
     output logic                     head_valido,
     output logic [`MEM_LIDX_W-1:0]   head_linea,
     output logic [`LINE_W-1:0]       head_datos,
-    output logic [`LINE_WORDS-1:0]   head_mascara,
-    input  logic                     head_ack,   // la escritura se completo
+    output logic [`LINE_MASK_W-1:0]   head_mascara,
+    input  logic                     head_ack,     // la escritura se completo
+    input  logic                     head_ocupada, // la cabeza se esta escribiendo
 
     // ---- Consulta de conflicto RAW ------------------------------------------
     input  logic [`MEM_LIDX_W-1:0]   consulta_linea,
@@ -108,7 +109,7 @@ module eviction_buffer #(
 
   logic [`MEM_LIDX_W-1:0] linea   [0:ENTRIES-1];
   logic [`LINE_W-1:0]     datos   [0:ENTRIES-1];
-  logic [`LINE_WORDS-1:0] mascara [0:ENTRIES-1];
+  logic [`LINE_MASK_W-1:0] mascara [0:ENTRIES-1];
 
   logic [PTR_W-1:0] head, tail;
 
@@ -161,12 +162,24 @@ module eviction_buffer #(
       if (k < ocupadas) begin
         if (linea[idx] == consulta_linea) hay_conflicto = 1'b1;
 
-        // Una entrada que el controlador esta retirando en este mismo ciclo ya
-        // no sirve para fusionar: lo que se escribiera en ella se perderia
-        // cuando la cabeza avance. En ese caso el deposito tiene que ir a una
-        // entrada nueva, y por eso la cabeza se excluye cuando hay head_ack.
+        // Una entrada que el controlador esta usando ya no sirve para
+        // fusionar, por dos razones distintas:
+        //
+        //   head_ack      la cabeza se retira en este mismo flanco, asi que lo
+        //                 que se escribiera en ella desapareceria con ella.
+        //
+        //   head_ocupada  el controlador ya copio la linea y la esta
+        //                 escribiendo en memoria. Fusionar aqui modificaria la
+        //                 entrada pero no la copia en vuelo, y esos bytes se
+        //                 perderian al confirmarse el drenado 53 ciclos
+        //                 despues. Es el caso mas dificil de ver, porque el
+        //                 dato se pierde lejos de donde se escribio.
+        //
+        // En los dos casos el deposito va a una entrada nueva y llega a
+        // memoria en una segunda transaccion, que es mas lento pero correcto.
         es_cabeza = (k == 0);
-        if ((linea[idx] == push_linea) && !(es_cabeza && head_ack)) begin
+        if ((linea[idx] == push_linea) &&
+            !(es_cabeza && (head_ack || head_ocupada))) begin
           fusiona    = 1'b1;
           fusion_idx = idx;
         end
@@ -187,7 +200,8 @@ module eviction_buffer #(
   // distintos, asi que no compiten.
   // ---------------------------------------------------------------------------
 
-  integer w;
+  integer w;   // recorre entradas del FIFO
+  integer b;   // recorre bytes de una linea
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -205,15 +219,19 @@ module eviction_buffer #(
       // ---- deposito --------------------------------------------------------
       if (push) begin
         if (fusiona) begin
-          // Misma linea ya encolada: se combinan. Para cada palabra, la que
-          // llega gana si viene marcada en la mascara nueva; si no, se conserva
-          // la que ya estaba. Asi la entrada queda con la version mas reciente
-          // de cada palabra, que es lo que la memoria tiene que terminar
-          // teniendo.
-          for (w = 0; w < `LINE_WORDS; w = w + 1)
-            if (push_mascara[w])
-              datos[fusion_idx][w*`XLEN +: `XLEN] <=
-                  push_datos[w*`XLEN +: `XLEN];
+          // Misma linea ya encolada: se combinan. Para cada BYTE, el que llega
+          // gana si viene marcado en la mascara nueva; si no, se conserva el que
+          // ya estaba. Asi la entrada queda con la version mas reciente de cada
+          // byte, que es lo que la memoria tiene que terminar teniendo.
+          //
+          // La fusion es por byte y no por palabra porque dos stores a la misma
+          // palabra pueden tocar bytes distintos: un SB al byte 0 seguido de un
+          // SB al byte 1 de la misma palabra. Fusionando por palabra, el segundo
+          // traeria su palabra entera y pisaria el byte que escribio el primero
+          // con lo que la cache tuviera ahi, que en un write miss no es nada.
+          for (b = 0; b < `LINE_BYTES; b = b + 1)
+            if (push_mascara[b])
+              datos[fusion_idx][b*8 +: 8] <= push_datos[b*8 +: 8];
           mascara[fusion_idx] <= mascara[fusion_idx] | push_mascara;
         end else if (!lleno) begin
           linea  [tail_idx] <= push_linea;

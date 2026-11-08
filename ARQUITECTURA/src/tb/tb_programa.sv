@@ -102,6 +102,9 @@ module tb_programa;
   logic [`NSLOTS-1:0][31:0] hw_ops_slot;
   logic [31:0]              hw_loads, hw_stores;
   logic [31:0]              hw_vacios, hw_saltos, hw_delay, hw_stall;
+  logic [31:0]              hw_l1_ldh, hw_l1_ldm, hw_l1_sth, hw_l1_stm;
+  logic [31:0]              hw_st_miss, hw_st_wb, hw_st_raw;
+  logic                     hw_drenada;
   logic                     hw_desbordado;
 
   top #(
@@ -125,6 +128,14 @@ module tb_programa;
       .perf_saltos         (hw_saltos),
       .perf_delay_vacios   (hw_delay),
       .perf_stall          (hw_stall),
+      .perf_l1_load_hit    (hw_l1_ldh),
+      .perf_l1_load_miss   (hw_l1_ldm),
+      .perf_l1_store_hit   (hw_l1_sth),
+      .perf_l1_store_miss  (hw_l1_stm),
+      .perf_stall_miss     (hw_st_miss),
+      .perf_stall_wb       (hw_st_wb),
+      .perf_stall_raw      (hw_st_raw),
+      .mem_drenada         (hw_drenada),
       .perf_desbordado     (hw_desbordado)
   );
 
@@ -151,6 +162,7 @@ module tb_programa;
   // El ciclo 1 es el primero despues de soltar el reset.
   // ---------------------------------------------------------------------------
 
+  integer guarda_drenado = 0;
   integer ciclo              = 0;
   integer bundles_ejecutados = 0;
 
@@ -158,7 +170,19 @@ module tb_programa;
     if (rst_n && !detenido) begin
       ciclo = ciclo + 1;
     end
-    if (rst_n && dut.ex_valid) bundles_ejecutados = bundles_ejecutados + 1;
+    // Los bundles se cuentan cuando LLEGAN A MEM, mirando la validez que sale
+    // de la frontera EX/MEM.
+    //
+    // Antes se contaban mirando ex_valid, y desde la Iteracion 3 eso esta mal:
+    // un bundle detenido por un fallo de cache se queda en EX con su validez
+    // encendida durante 54 ciclos, y se contaria 54 veces. La frontera EX/MEM
+    // recibe una burbuja durante el stall, asi que su validez se enciende
+    // exactamente una vez por bundle que completa.
+    //
+    // Sigue siendo una cuenta independiente de la del hardware: distinta etapa
+    // (MEM contra ID) y distinto mecanismo (la burbuja de la frontera contra
+    // la condicion de avance del contador).
+    if (rst_n && dut.mem_valid) bundles_ejecutados = bundles_ejecutados + 1;
   end
 
   // ---------------------------------------------------------------------------
@@ -207,7 +231,10 @@ module tb_programa;
     logic [31:0] w0, w1, w2;
     logic [15:0] w3, w4;
     logic [4:0]  opc2;   // Icarus no encadena un rango con un indice
-    if (rst_n && dut.id_valid) begin
+    // Las instrucciones se cuentan solo cuando el bundle AVANZA. Durante un
+    // stall el mismo bundle sigue en ID y volver a contarlo inflaria la cuenta
+    // tanto como dure la espera.
+    if (rst_n && dut.id_valid && !dut.cache_stall) begin
       tb_instrucciones = tb_instrucciones + ranuras_ocupadas(dut.id_bundle);
       w0 = dut.id_bundle[`SLOT_S0];  w1 = dut.id_bundle[`SLOT_S1];
       w2 = dut.id_bundle[`SLOT_S2];  w3 = dut.id_bundle[`SLOT_S3];
@@ -612,6 +639,74 @@ module tb_programa;
     end
   endtask
 
+  // ---------------------------------------------------------------------------
+  // Las metricas de la cache L1-D (tabla 2 del enunciado)
+  //
+  // El AMAT se calcula aqui, desde los contadores, y no en hardware: es una
+  // division y no hay ninguna razon para gastar un divisor en algo que el
+  // informe resuelve con una resta.
+  //
+  //     AMAT = T_acierto + tasa_de_fallos x penalidad
+  //
+  // La penalidad se MIDE (ciclos de stall por fallo / cantidad de fallos) en
+  // vez de suponerse igual a T_mem. Los dos numeros deberian parecerse, y
+  // cuando no se parecen eso mismo es el hallazgo: significa que los fallos
+  // estan pagando algo mas que la memoria, por ejemplo la espera de un
+  // conflicto RAW.
+  // ---------------------------------------------------------------------------
+
+  task automatic imprimir_cache(input integer salida);
+    integer accesos, fallos, aciertos;
+    real tasa_fallos, penalidad_medida, amat;
+    integer total_stall;
+    begin
+      accesos  = hw_l1_ldh + hw_l1_ldm + hw_l1_sth + hw_l1_stm;
+      fallos   = hw_l1_ldm + hw_l1_stm;
+      aciertos = hw_l1_ldh + hw_l1_sth;
+
+      tasa_fallos = (accesos == 0) ? 0.0 : (1.0 * fallos) / (1.0 * accesos);
+
+      // Solo los fallos de LECTURA detienen el pipeline: con no-write-allocate
+      // un fallo de escritura no trae la linea y no cuesta ciclos.
+      penalidad_medida = (hw_l1_ldm == 0) ? 0.0 :
+                         (1.0 * hw_st_miss) / (1.0 * hw_l1_ldm);
+
+      amat = `L1_HIT_CYCLES + tasa_fallos * penalidad_medida;
+
+      total_stall = hw_st_miss + hw_st_wb + hw_st_raw;
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  cache L1-D (4 KB, 2 vias, write-through, no-write-allocate, LRU)");
+      $fdisplay(salida, "    accesos totales              %10d", accesos);
+      $fdisplay(salida, "      lecturas: aciertos         %10d", hw_l1_ldh);
+      $fdisplay(salida, "      lecturas: fallos           %10d", hw_l1_ldm);
+      $fdisplay(salida, "      escrituras: aciertos       %10d", hw_l1_sth);
+      $fdisplay(salida, "      escrituras: fallos         %10d", hw_l1_stm);
+      $fdisplay(salida, "    tasa de aciertos             %9.2f%%",
+                (accesos == 0) ? 0.0 : 100.0 * aciertos / accesos);
+      $fdisplay(salida, "    tasa de fallos               %9.2f%%",
+                100.0 * tasa_fallos);
+      $fdisplay(salida, "    penalidad medida por fallo   %10.1f ciclos  (T_mem = %0d)",
+                penalidad_medida, `T_MEM);
+      $fdisplay(salida, "    AMAT                         %10.2f ciclos", amat);
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "    ciclos perdidos, por causa");
+      $fdisplay(salida, "      fallo de lectura           %10d", hw_st_miss);
+      $fdisplay(salida, "      write buffer lleno         %10d", hw_st_wb);
+      $fdisplay(salida, "      conflicto RAW              %10d", hw_st_raw);
+      $fdisplay(salida, "      total                      %10d", total_stall);
+
+      // El desglose tiene que sumar el contador global de stalls. Si no suma,
+      // alguna causa se esta contando dos veces o falta una.
+      comparar(salida, "suma de causas = stalls", total_stall, hw_stall);
+
+      // Y todo acceso a la cache fue un load o un store del programa.
+      comparar(salida, "accesos L1 = loads + stores", accesos,
+               hw_loads + hw_stores);
+    end
+  endtask
+
   task automatic imprimir_metricas(input integer salida);
     real ipc, bpc, ocupacion;
     integer k, total_ciclos;
@@ -636,6 +731,9 @@ module tb_programa;
       $fdisplay(salida, "    saltos tomados               %10d", hw_saltos);
       $fdisplay(salida, "    delay slots desperdiciados   %10d", hw_delay);
       $fdisplay(salida, "    ciclos perdidos por stalls   %10d", hw_stall);
+
+      // ---- jerarquia de memoria (Iteracion 3) ------------------------------
+      imprimir_cache(salida);
 
       $fdisplay(salida, "");
       $fdisplay(salida, "    ocupacion por ranura");
@@ -760,9 +858,9 @@ module tb_programa;
     // tiempo 0, asi que la carga va un paso despues para no competir con ellos.
     #1;
     $readmemh(archivo_programa, dut.u_imem.storage);
-    if (archivo_datos != "") $readmemh(archivo_datos, dut.u_dmem.storage);
+    if (archivo_datos != "") $readmemh(archivo_datos, dut.u_mem_sys.u_mem.storage);
     for (i = 0; i < CANTIDAD_PALABRAS; i = i + 1)
-      memoria_inicial[i] = dut.u_dmem.storage[i];
+      memoria_inicial[i] = dut.u_mem_sys.u_mem.storage[i];
 
     $display("=== tb_programa: %s ===", archivo_programa);
     if (archivo_datos != "")
@@ -773,8 +871,23 @@ module tb_programa;
     #1 rst_n = 1'b1;
 
     while (!detenido && ciclo < tope_ciclos) @(posedge clk);
-    // Que terminen los bundles que ya estaban dentro del pipeline
-    repeat (8) @(posedge clk);
+
+    // Que terminen los bundles que ya estaban dentro del pipeline Y que la
+    // jerarquia de memoria escriba todo lo que le quedaba pendiente.
+    //
+    // Ya no alcanza con una espera fija de unos pocos ciclos: desde la
+    // Iteracion 3 un bundle detenido en un fallo de cache puede quedarse 54
+    // ciclos en su etapa, y el ultimo store del programa todavia tiene que
+    // atravesar dos buffers antes de llegar a memoria. mem_drenada dice
+    // cuando de verdad no queda nada en vuelo.
+    //
+    // Son ciclos del ARNES: el contador 'ciclo' no avanza aqui y nada de esta
+    // espera entra en las metricas.
+    guarda_drenado = 0;
+    while (!hw_drenada && guarda_drenado < 500000) begin
+      @(posedge clk);
+      guarda_drenado = guarda_drenado + 1;
+    end
     #1;
 
     if (traza_hasta > 0 && !traza_impresa && ciclo >= traza_desde)
@@ -833,8 +946,8 @@ module tb_programa;
       $fdisplay(salida, "  memoria de datos desde 0x%08h", mostrar_desde);
       for (i = 0; i < palabras_a_mostrar; i = i + 1)
         $fdisplay(salida, "    0x%08h  %08h  %11d", mostrar_desde + 4 * i,
-                 dut.u_dmem.storage[mostrar_desde / 4 + i],
-                 $signed(dut.u_dmem.storage[mostrar_desde / 4 + i]));
+                 dut.u_mem_sys.u_mem.storage[mostrar_desde / 4 + i],
+                 $signed(dut.u_mem_sys.u_mem.storage[mostrar_desde / 4 + i]));
     end
 
     // ------------------------------------------------------------------------
@@ -843,7 +956,7 @@ module tb_programa;
     // valor que habia no aparece.
     cambios = 0; primer_cambio = -1; ultimo_cambio = -1; mostrados = 0;
     for (i = 0; i < CANTIDAD_PALABRAS; i = i + 1)
-      if (dut.u_dmem.storage[i] !== memoria_inicial[i]) begin
+      if (dut.u_mem_sys.u_mem.storage[i] !== memoria_inicial[i]) begin
         cambios = cambios + 1;
         if (primer_cambio < 0) primer_cambio = i;
         ultimo_cambio = i;
@@ -856,11 +969,11 @@ module tb_programa;
                 cambios, 4 * primer_cambio, 4 * ultimo_cambio);
       $fdisplay(salida, "    direccion   antes     ahora     ahora (decimal)");
       for (i = primer_cambio; i <= ultimo_cambio; i = i + 1)
-        if (dut.u_dmem.storage[i] !== memoria_inicial[i] &&
+        if (dut.u_mem_sys.u_mem.storage[i] !== memoria_inicial[i] &&
             mostrados < MAXIMO_CAMBIOS_EN_PANTALLA) begin
           $fdisplay(salida, "    0x%08h  %08h  %08h  %11d", 4 * i,
-                    memoria_inicial[i], dut.u_dmem.storage[i],
-                    $signed(dut.u_dmem.storage[i]));
+                    memoria_inicial[i], dut.u_mem_sys.u_mem.storage[i],
+                    $signed(dut.u_mem_sys.u_mem.storage[i]));
           mostrados = mostrados + 1;
         end
       if (cambios > mostrados)
@@ -870,7 +983,7 @@ module tb_programa;
 
     // ------------------------------------------------------------------------
     if (archivo_volcado != "") begin
-      $writememh(archivo_volcado, dut.u_dmem.storage);
+      $writememh(archivo_volcado, dut.u_mem_sys.u_mem.storage);
       $fdisplay(salida, "");
       $fdisplay(salida, "  memoria de datos completa guardada en %s", archivo_volcado);
     end

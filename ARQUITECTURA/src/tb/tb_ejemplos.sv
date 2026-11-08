@@ -191,6 +191,8 @@ module tb_ejemplos;
 
   integer i, c, malos;
 
+  integer guarda_drenado;
+
   initial begin
     if ($test$plusargs("VCD")) begin
       $dumpfile("tb_ejemplos.vcd");
@@ -209,7 +211,7 @@ module tb_ejemplos;
     $readmemh("../../tools/programas/contar_hasta_n.hex", cnt.u_imem.storage);
     // estadisticas.s es el unico de los tres con seccion .data: el arreglo de
     // ocho palabras que recorre.
-    $readmemh("../../tools/programas/estadisticas_datos.hex", est.u_dmem.storage);
+    $readmemh("../../tools/programas/estadisticas_datos.hex", est.u_mem_sys.u_mem.storage);
 
     $display("=== tb_ejemplos: los programas de demostracion, comprobados ===");
     $display("");
@@ -222,6 +224,18 @@ module tb_ejemplos;
       @(posedge clk);
       c = c + 1;
     end
+
+    // Y espera a que la jerarquia de memoria termine de escribir. Desde la
+    // Iteracion 3 un store pasa por la cache y por dos buffers antes de llegar
+    // a memoria principal, asi que revisarla apenas el programa se detiene
+    // daria por perdidos stores que seguian en camino. Son ciclos del ARNES.
+    guarda_drenado = 0;
+    while (!(fib.mem_drenada && est.mem_drenada && ses.mem_drenada && cnt.mem_drenada) && guarda_drenado < 200000) begin
+      @(posedge clk);
+      guarda_drenado = guarda_drenado + 1;
+    end
+    #1;
+
     $display("  (los tres corrieron en paralelo, %0d ciclos hasta el ultimo HALT)", c);
     $display("");
 
@@ -236,11 +250,11 @@ module tb_ejemplos;
     // coinciden en vez de imprimir 47 lineas; si alguno falla, se dice cual.
     malos = 0;
     for (i = 0; i < N_FIB; i = i + 1)
-      if (fib.u_dmem.storage[W_FIB + i] !== fibo[i]) begin
+      if (fib.u_mem_sys.u_mem.storage[W_FIB + i] !== fibo[i]) begin
         malos = malos + 1;
         if (malos <= 3)
           $display("         F(%0d): %08h, esperado %08h", i,
-                   fib.u_dmem.storage[W_FIB + i], fibo[i]);
+                   fib.u_mem_sys.u_mem.storage[W_FIB + i], fibo[i]);
       end
     check_int("los 47 valores coinciden con la sucesion", malos, 0);
 
@@ -252,7 +266,7 @@ module tb_ejemplos;
     check32("r4 = 0x1BC, el puntero tras el ultimo",
             regs_f[4], 32'h0000_01BC);
     check32("F(46) es el ultimo que cabe con signo",
-            fib.u_dmem.storage[W_FIB + 46], 32'h6D73_E55F);
+            fib.u_mem_sys.u_mem.storage[W_FIB + 46], 32'h6D73_E55F);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -263,16 +277,16 @@ module tb_ejemplos;
     check_int("sin fallas en su PSW", psw_e[`PSW_EXC], 1'b0);
 
     // arreglo: 15, -3, 42, 7, -20, 8, 100, 6
-    check32("suma      = 155", est.u_dmem.storage[W_EST + 0], 32'h0000_009B);
-    check32("maximo    = 100", est.u_dmem.storage[W_EST + 1], 32'h0000_0064);
-    check32("minimo    = -20", est.u_dmem.storage[W_EST + 2], 32'hFFFF_FFEC);
-    check32("negativos =   2", est.u_dmem.storage[W_EST + 3], 32'h0000_0002);
+    check32("suma      = 155", est.u_mem_sys.u_mem.storage[W_EST + 0], 32'h0000_009B);
+    check32("maximo    = 100", est.u_mem_sys.u_mem.storage[W_EST + 1], 32'h0000_0064);
+    check32("minimo    = -20", est.u_mem_sys.u_mem.storage[W_EST + 2], 32'hFFFF_FFEC);
+    check32("negativos =   2", est.u_mem_sys.u_mem.storage[W_EST + 3], 32'h0000_0002);
     // Los dos ultimos salen de __div32: 155 / 8 = 19, residuo 3. Es la unica
     // prueba del proyecto que llama a la subrutina desde un programa de
     // verdad, con enlace y retorno, en vez de con los pares de div32_prueba.s.
     check32("promedio  =  19 (155 / 8 por __div32)",
-            est.u_dmem.storage[W_EST + 4], 32'h0000_0013);
-    check32("residuo   =   3",  est.u_dmem.storage[W_EST + 5], 32'h0000_0003);
+            est.u_mem_sys.u_mem.storage[W_EST + 4], 32'h0000_0013);
+    check32("residuo   =   3",  est.u_mem_sys.u_mem.storage[W_EST + 5], 32'h0000_0003);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -285,11 +299,11 @@ module tb_ejemplos;
     check_int("el programa llego a HALT", halt_s, 1'b1);
 
     check32("dentro de la region, tras LOGIN: AUTH = 1",
-            ses.u_dmem.storage[W_SES + 0], 32'h0000_0010);
+            ses.u_mem_sys.u_mem.storage[W_SES + 0], 32'h0000_0010);
     check32("de vuelta afuera, sin LOGOUT: AUTH = 0",
-            ses.u_dmem.storage[W_SES + 1], 32'h0000_0000);
+            ses.u_mem_sys.u_mem.storage[W_SES + 1], 32'h0000_0000);
     check32("tras intentar F4E afuera: EXC con DENIED",
-            ses.u_dmem.storage[W_SES + 2], 32'h0000_0240);
+            ses.u_mem_sys.u_mem.storage[W_SES + 2], 32'h0000_0240);
 
     // Y el PSW final, leido del puerto y no de la memoria, tiene que contar lo
     // mismo: la ronda de afuera se anulo y la causa quedo registrada.
@@ -312,13 +326,13 @@ module tb_ejemplos;
     // Guarda 1, 2, 3 ... 10 desde 0x400
     malos = 0;
     for (i = 0; i < 10; i = i + 1)
-      if (cnt.u_dmem.storage[W_CNT + i] !== i + 1) malos = malos + 1;
+      if (cnt.u_mem_sys.u_mem.storage[W_CNT + i] !== i + 1) malos = malos + 1;
     check_int("guardo 1 a 10 en memoria desde 0x400", malos, 0);
 
     // Y la suma, que es 1+2+...+10 = 55
     check32("la suma quedo en r6", regs_c[6], 32'd55);
     check32("y tambien en 0x440",
-            cnt.u_dmem.storage[32'h0440 / 4], 32'd55);
+            cnt.u_mem_sys.u_mem.storage[32'h0440 / 4], 32'd55);
 
 `ifdef FORCE_FAIL
     // ------------------------------------------------------------------------

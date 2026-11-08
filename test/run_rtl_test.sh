@@ -8,16 +8,25 @@ CPU=${4:-../src/cpu}
 OBJECT_SOURCE=${5:-}
 ROT_SECRET=${6:-}
 MAX_CYCLES=${7:-20000}
+# Banderas extra para el compilador, por ejemplo OPT=-O1. Sirven para correr la
+# misma bateria con y sin optimizacion: el valor de retorno que espera cada
+# prueba tiene que ser el mismo, que es la definicion de que optimizar no
+# cambia el programa.
+OPT=${OPT:-}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/nova-rtl.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+
+if [ -n "$OPT" ]; then
+    echo "   (compilando con $OPT)"
+fi
 
 if [ -n "$OBJECT_SOURCE" ]; then
     cp "$OBJECT_SOURCE" "$TMP/calculos.nv"
     cp "$(dirname "$OBJECT_SOURCE")/basicas.nv" "$TMP/basicas.nv"
-    "$NOVAC" -c "$TMP/calculos.nv" -o "$TMP/calculos.nvo"
-    "$NOVAC" "$SOURCE" -I "$TMP" -o "$TMP/program.nvx"
+    "$NOVAC" $OPT -c "$TMP/calculos.nv" -o "$TMP/calculos.nvo"
+    "$NOVAC" $OPT "$SOURCE" -I "$TMP" -o "$TMP/program.nvx"
 else
-    "$NOVAC" "$SOURCE" -o "$TMP/program.nvx"
+    "$NOVAC" $OPT "$SOURCE" -o "$TMP/program.nvx"
 fi
 python3 ARQUITECTURA/tools/novac_image.py "$TMP/program.nvx" \
     --imem "$TMP/imem.hex" --dmem "$TMP/dmem.hex"

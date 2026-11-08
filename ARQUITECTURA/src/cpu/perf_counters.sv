@@ -97,7 +97,20 @@ module perf_counters #(
 
     // ---- Estado del procesador ----------------------------------------------
     input  logic halted,  // despues de HALT ya no se cuentan ciclos
-    input  logic stall,   // Iteracion 3: el pipeline esta congelado
+    input  logic stall,   // el pipeline esta congelado por la jerarquia
+
+    // ---- Eventos de la cache L1-D (Iteracion 3) -----------------------------
+    // Son pulsos de un ciclo que produce l1_dcache.sv. Se cuentan aqui, y no
+    // alla, para que toda cuenta del procesador pase por la misma logica de
+    // saturacion: un contador que da la vuelta en silencio es el error que
+    // esta unidad existe para evitar, y eso vale igual para los de cache.
+    input  logic ev_load_hit,
+    input  logic ev_load_miss,
+    input  logic ev_store_hit,
+    input  logic ev_store_miss,
+    input  logic ev_stall_miss,
+    input  logic ev_stall_wb,
+    input  logic ev_stall_raw,
 
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
@@ -115,6 +128,15 @@ module perf_counters #(
     output logic [CNT_W-1:0] saltos_tomados,  // saltos que se tomaron
     output logic [CNT_W-1:0] delay_vacios,    // delay slots que no traian trabajo
     output logic [CNT_W-1:0] ciclos_stall,    // ciclos perdidos por stalls
+
+    // ---- Cache L1-D ----------------------------------------------------------
+    output logic [CNT_W-1:0] l1_load_hit,
+    output logic [CNT_W-1:0] l1_load_miss,
+    output logic [CNT_W-1:0] l1_store_hit,
+    output logic [CNT_W-1:0] l1_store_miss,
+    output logic [CNT_W-1:0] stall_por_miss,
+    output logic [CNT_W-1:0] stall_por_wb,
+    output logic [CNT_W-1:0] stall_por_raw,
 
     output logic desbordado  // pegajoso: algun contador llego al tope
 );
@@ -201,7 +223,7 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 14;
+  localparam int NCONT = 21;
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -213,6 +235,13 @@ module perf_counters #(
   localparam int C_STALL    = 11;
   localparam int C_LOAD     = 12;
   localparam int C_STORE    = 13;
+  localparam int C_L1_LDH   = 14;
+  localparam int C_L1_LDM   = 15;
+  localparam int C_L1_STH   = 16;
+  localparam int C_L1_STM   = 17;
+  localparam int C_SM_MISS  = 18;
+  localparam int C_SM_WB    = 19;
+  localparam int C_SM_RAW   = 20;
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
@@ -228,7 +257,32 @@ module perf_counters #(
 
     if (corre) begin
       inc[C_CICLOS] = 3'd1;
-      if (stall) inc[C_STALL] = 3'd1;
+    end
+
+    // ---- Jerarquia de memoria -------------------------------------------
+    // Estos ocho NO miran 'corre', y la diferencia importa.
+    //
+    // 'corre' se apaga en cuanto la busqueda registra el HALT, pero en ese
+    // momento todavia quedan bundles dentro del pipeline, empezando por el
+    // delay slot del propio HALT. Si el ultimo acceso a memoria del programa
+    // vive ahi -- que es comun, porque un programa suele terminar guardando su
+    // resultado -- su acierto o su fallo ocurriria con 'corre' ya apagado y no
+    // se contaria. El sintoma es desconcertante: la memoria tiene el dato
+    // correcto y la cache jura que nunca hubo una escritura.
+    //
+    // Se cuentan entonces mientras haya reset liberado. La consecuencia es que
+    // miden el programa COMPLETO, delay slot del HALT incluido, mientras que
+    // 'ciclos' sigue la convencion de la Iteracion 1 y se detiene en el HALT.
+    // Los dos criterios solo se separan por esos ultimos bundles.
+    if (rst_n) begin
+      if (stall)         inc[C_STALL]   = 3'd1;
+      if (ev_load_hit)   inc[C_L1_LDH]  = 3'd1;
+      if (ev_load_miss)  inc[C_L1_LDM]  = 3'd1;
+      if (ev_store_hit)  inc[C_L1_STH]  = 3'd1;
+      if (ev_store_miss) inc[C_L1_STM]  = 3'd1;
+      if (ev_stall_miss) inc[C_SM_MISS] = 3'd1;
+      if (ev_stall_wb)   inc[C_SM_WB]   = 3'd1;
+      if (ev_stall_raw)  inc[C_SM_RAW]  = 3'd1;
     end
 
     if (avanza) begin
@@ -283,6 +337,14 @@ module perf_counters #(
   assign ciclos_stall   = cont[C_STALL];
   assign accesos_load   = cont[C_LOAD];
   assign accesos_store  = cont[C_STORE];
+
+  assign l1_load_hit    = cont[C_L1_LDH];
+  assign l1_load_miss   = cont[C_L1_LDM];
+  assign l1_store_hit   = cont[C_L1_STH];
+  assign l1_store_miss  = cont[C_L1_STM];
+  assign stall_por_miss = cont[C_SM_MISS];
+  assign stall_por_wb   = cont[C_SM_WB];
+  assign stall_por_raw  = cont[C_SM_RAW];
 
   genvar g;
   generate

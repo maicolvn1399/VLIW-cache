@@ -22,6 +22,7 @@
 #include "enlace.h"
 #include "ide.h"
 #include "ide_lex.h"
+#include "muerto.h"
 #include "semantic.h"
 #include "symtab.h"
 #include "tac.h"
@@ -191,6 +192,22 @@ int ide_diagnosticar(const char *ruta, int con_tokens, JsonW *j) {
             if (sem_ok && tabla != NULL) {
                 TACList *layout = tac_generate_from_ast(ast, tabla);
                 codegen_update_symbol_layout(layout, tabla);
+                /*
+                 * Fase 6, solo por sus advertencias. Se corre DESPUES del
+                 * layout para que las direcciones que muestra el editor sigan
+                 * siendo las de -O0, que es como compila por omision; esta
+                 * copia se descarta enseguida, asi que optimizarla no afecta a
+                 * nada mas.
+                 *
+                 * Sale casi gratis: el codigo intermedio ya esta generado y el
+                 * grafo mas la vivacidad cuestan menos que el propio layout,
+                 * que arma el programa entero con relajacion de saltos.
+                 *
+                 * El resultado es que una asignacion muerta se subraya mientras
+                 * se escribe, igual que un error de tipos, en vez de aparecer
+                 * recien al compilar con -O1.
+                 */
+                muerto_eliminar(layout, NULL, 1);
                 tac_free(layout);
             }
         }

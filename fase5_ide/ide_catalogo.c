@@ -304,6 +304,13 @@ static const EntradaCatalogo catalogo[] = {
  "de CERBERO. Compila, pero no se puede cargar en el procesador.",
  "Reduzca el tamano del programa, o active las optimizaciones del compilador."},
 
+{"W010", "Asignacion muerta",
+ "El analisis de vivacidad encontro que el valor que se le asigna a la variable "
+ "no se vuelve a leer por ningun camino del grafo de flujo, asi que el calculo "
+ "sobra. Con -O1 la asignacion se elimina del codigo generado.",
+ "Borre la asignacion si no hace falta, o revise si queria leer esa variable en "
+ "algun lado: una asignacion muerta suele ser una variable confundida con otra."},
+
 {"W032", "Advertencia general",
  "Aviso del compilador que no impide generar codigo.",
  "Revise el mensaje para el detalle."},

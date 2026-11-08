@@ -62,6 +62,11 @@ module reg_if_id (
     input  logic rst_n,              // reset sincrono, activo en bajo
 
     // ---- Desde la etapa de busqueda ----------------------------------------
+    // Congelamiento. Mientras esta encendido la frontera retiene lo que tiene:
+    // el bundle que la atraveso no avanza y el que venia detras no entra. Es
+    // retencion, no burbuja, porque el trabajo de aguas arriba todavia no se
+    // hizo y tiene que seguir ahi cuando el stall se levante.
+    input  logic             stall,
     input  logic             valid_in,
     input  logic [`XLEN-1:0] pc_in,
 
@@ -74,7 +79,7 @@ module reg_if_id (
     if (!rst_n) begin
       valid_out <= 1'b0;
       pc_out    <= {`XLEN{1'b0}};
-    end else begin
+    end else if (!stall) begin
       valid_out <= valid_in;
       pc_out    <= pc_in;
     end
