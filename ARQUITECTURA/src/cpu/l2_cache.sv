@@ -114,3 +114,69 @@ module l2_cache #(
               datos_mezclados[b*8 +: 8] = mem_datos[b*8 +: 8];
       end
   end
+
+  // ===========================================================================
+  // 5. Máquina de Estados L2 (Write-Back y Write-Allocate)
+  // ===========================================================================
+
+  typedef enum logic [2:0] {
+      ESPERA,
+      LATENCIA,  // Simula los 8 ciclos de hit time
+      EVALUAR,   // Decide si es hit, miss sucio o miss limpio
+      EVICT,     // Expulsión de la víctima sucia hacia el Eviction Buffer
+      ALLOCATE,  // Traer nueva línea desde memoria (si aplica)
+      ACTUALIZAR // Insertar línea en caché y levantar 'listo'
+  } estado_l2_t;
+
+  estado_l2_t estado, proximo_estado;
+  logic [2:0] contador_latencia;
+
+  always_ff @(posedge clk) begin
+      if (!rst_n) estado <= ESPERA;
+      else        estado <= proximo_estado;
+  end
+
+  always_comb begin
+      proximo_estado = estado;
+      case (estado)
+          ESPERA: begin
+              if (req_lectura || req_escritura) proximo_estado = LATENCIA;
+          end
+          
+          LATENCIA: begin
+              // Hit time emulado de 8 ciclos (el contador arranca en 7)
+              if (contador_latencia == 0) proximo_estado = EVALUAR;
+          end
+
+          EVALUAR: begin
+              if (acierto) begin
+                  proximo_estado = ESPERA; 
+              end else begin
+                  // Fallo: ¿la víctima está sucia?
+                  if (valido[via_victima][conjunto] && sucio[via_victima][conjunto]) 
+                      proximo_estado = EVICT;
+                  else 
+                      proximo_estado = ALLOCATE;
+              end
+          end
+          
+          EVICT: begin
+              // Si el eviction buffer no está lleno, el depósito entra en 1 ciclo
+              if (!ev_lleno) proximo_estado = ALLOCATE; 
+          end
+          
+          ALLOCATE: begin
+              // Bypass total: si se escriben los 32B completos, no necesitamos leer memoria
+              if (req_escritura && mascara_completa_32B) 
+                  proximo_estado = ACTUALIZAR;
+              else if (mem_listo) 
+                  proximo_estado = ACTUALIZAR;
+          end
+          
+          ACTUALIZAR: begin
+              proximo_estado = ESPERA;
+          end
+          
+          default: proximo_estado = ESPERA;
+      endcase
+  end
