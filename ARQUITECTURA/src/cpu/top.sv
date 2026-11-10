@@ -146,7 +146,7 @@ module top #(
     output logic [31:0]                   perf_delay_vacios,
     output logic [31:0]                   perf_stall,
 
-    // ---- Metricas de la cache L1-D (Iteracion 3) ----------------------------
+// ---- Metricas de la cache L1-D (Iteracion 3 y 4) ------------------------
     output logic [31:0]                   perf_l1_load_hit,
     output logic [31:0]                   perf_l1_load_miss,
     output logic [31:0]                   perf_l1_store_hit,
@@ -582,13 +582,13 @@ module top #(
                            sa_fault || s3_es_reservado || ex_s4_fault;
 
   // ===========================================================================
-  // JERARQUIA DE MEMORIA DE DATOS  (Proyecto II, Iteracion 3)
+  // JERARQUIA DE MEMORIA DE DATOS  (Proyecto II, Iteracion 3 y 4)
   //
   // La dmem ideal del Proyecto I desaparecio. En su lugar:
   //
-  //     LSU  ->  L1-D  ->  write buffer  ->  mem_system  ->  memoria principal
-  //                 |                            ^
-  //                 +--- relleno de linea --------+
+  //     LSU  ->  L1-D  ->  write buffer  ->  l2_arbiter  ->  L2  ->  mem_system
+  //                 |                                                   ^
+  //                 +--- relleno de linea ------------------------------+
   //
   // La direccion sigue presentandose combinacionalmente durante EX y el dato
   // sigue llegando a MEM por un registro de salida, exactamente como con la
@@ -616,7 +616,7 @@ module top #(
   logic [`MEM_LIDX_W-1:0]  wb_consulta;
   logic                    wb_conflicto;
 
-  // ---- Cache -> memoria (relleno) --------------------------------------------
+// ---- Cache L1 -> Arbitro L2 (relleno) --------------------------------------
   logic                    l1_mem_req;
   logic [`MEM_LIDX_W-1:0]  l1_mem_linea;
   logic                    l1_mem_listo;
@@ -632,6 +632,7 @@ module top #(
   logic cache_req;
   assign cache_req = lsu_rd_we || lsu_mem_we;
 
+  // 1. Instancia de la Caché L1-D
   l1_dcache u_l1d (
       .clk           (clk),
       .rst_n         (rst_n),
@@ -662,7 +663,7 @@ module top #(
       .ev_stall_raw  (ev_stall_raw)
   );
 
-  // ---- Write buffer L1-D -> nivel siguiente ----------------------------------
+// ---- Write buffer L1-D -> L2 -----------------------------------------------
 
   logic                    wb_head_valido;
   logic [`MEM_LIDX_W-1:0]  wb_head_linea;
@@ -672,6 +673,7 @@ module top #(
   logic                    wb_vacio;
   logic [`EVICT_IDX_W:0]   wb_ocupadas;
 
+  // 2. Instancia del Write Buffer
   eviction_buffer #(.ENTRIES (`WB_ENTRIES)) u_write_buffer (
       .clk            (clk),
       .rst_n          (rst_n),
@@ -684,11 +686,7 @@ module top #(
       .head_datos     (wb_head_datos),
       .head_mascara   (wb_head_mascara),
       .head_ack       (wb_head_ack),
-      // El write buffer de L1 se vacia hacia mem_system en UN ciclo: se
-      // confirma la cabeza en el mismo flanco en que se deposita, asi que no
-      // existe la ventana en que la entrada esta en vuelo. La guarda de
-      // head_ack ya la cubre entera.
-      .head_ocupada   (1'b0),
+      .head_ocupada   (wb_head_ocupada),
       .consulta_linea (wb_consulta),
       .conflicto      (wb_conflicto),
       .lleno          (wb_lleno),
@@ -696,13 +694,73 @@ module top #(
       .ocupadas       (wb_ocupadas)
   );
 
-  // El drenado del write buffer entra al subsistema de memoria por su puerto de
-  // desalojo. Se confirma en el mismo ciclo en que se deposita, porque el
-  // subsistema lo acepta en uno: a partir de ahi la escritura ya es problema de
-  // su propio eviction buffer.
-  logic mem_ev_lleno;
+// ---- Arbitro L2 ------------------------------------------------------------
+  logic                     l2_req_lectura;
+  logic                     l2_req_escritura;
+  logic [`MEM_LIDX_W-1:0]   l2_req_linea;
+  logic [`LINE_W-1:0]       l2_req_wdata;
+  logic [`LINE_MASK_W-1:0]  l2_req_wmask;
+  logic [`LINE_W-1:0]       l2_rdata;
+  logic                     l2_listo;
 
-  assign wb_head_ack = wb_head_valido && !mem_ev_lleno;
+  // 3. Instancia del Árbitro L2
+  l2_arbiter u_l2_arbiter (
+      .clk              (clk),
+      .rst_n            (rst_n),
+      .l1_req           (l1_mem_req),
+      .l1_linea         (l1_mem_linea),
+      .l1_listo         (l1_mem_listo),
+      .l1_rdata         (l1_mem_datos),
+      .wb_req           (wb_head_valido),
+      .wb_linea         (wb_head_linea),
+      .wb_datos         (wb_head_datos),
+      .wb_mascara       (wb_head_mascara),
+      .wb_ack           (wb_head_ack),
+      .wb_drenando      (wb_head_ocupada),
+      .l2_req_lectura   (l2_req_lectura),
+      .l2_req_escritura (l2_req_escritura),
+      .l2_req_linea     (l2_req_linea),
+      .l2_req_wdata     (l2_req_wdata),
+      .l2_req_wmask     (l2_req_wmask),
+      .l2_rdata         (l2_rdata),
+      .l2_listo         (l2_listo)
+  );
+
+  // ---- Caché L2 Unificada ----------------------------------------------------
+  logic                     l2_mem_req;
+  logic [`MEM_LIDX_W-1:0]   l2_mem_linea;
+  logic                     l2_ev_push;
+  logic [`MEM_LIDX_W-1:0]   l2_ev_linea;
+  logic [`LINE_W-1:0]       l2_ev_datos;
+  logic [`LINE_MASK_W-1:0]  l2_ev_mascara;
+  logic                     mem_sys_listo;
+  logic [`LINE_W-1:0]       mem_sys_linea_datos;
+  logic                     mem_ev_lleno;
+
+  // 4. Instancia de la Caché L2
+  l2_cache #(
+      .WAYS(4),
+      .SETS(128)
+  ) u_l2_cache (
+      .clk              (clk),
+      .rst_n            (rst_n),
+      .req_lectura      (l2_req_lectura),
+      .req_escritura    (l2_req_escritura),
+      .req_linea        (l2_req_linea),
+      .req_wdata        (l2_req_wdata),
+      .req_wmask        (l2_req_wmask),
+      .rdata            (l2_rdata),
+      .listo            (l2_listo),
+      .mem_req          (l2_mem_req),
+      .mem_linea        (l2_mem_linea),
+      .mem_listo        (mem_sys_listo),
+      .mem_datos        (mem_sys_linea_datos),
+      .ev_push          (l2_ev_push),
+      .ev_linea         (l2_ev_linea),
+      .ev_datos         (l2_ev_datos),
+      .ev_mascara       (l2_ev_mascara),
+      .ev_lleno         (mem_ev_lleno)
+  );
 
   // ---- Memoria principal ------------------------------------------------------
 
@@ -710,6 +768,7 @@ module top #(
   logic [`EVICT_IDX_W:0] mem_sys_ev_ocupadas;
   logic mem_sys_inicia_rd, mem_sys_inicia_wr;
 
+  // 5. Instancia del Subsistema de Memoria Principal (Envoltorio)
   // El tamano sale del parametro NUM_WORDS del procesador, no de la constante
   // MEM_WORDS. Hasta la Iteracion 2 ese parametro dimensionaba la dmem; al
   // reemplazarla por la jerarquia hay que seguir respetandolo, porque varios
@@ -719,14 +778,14 @@ module top #(
   mem_system #(.NUM_WORDS (NUM_WORDS)) u_mem_sys (
       .clk            (clk),
       .rst_n          (rst_n),
-      .req            (l1_mem_req),
-      .req_linea      (l1_mem_linea),
-      .listo          (l1_mem_listo),
-      .linea_datos    (l1_mem_datos),
-      .ev_push        (wb_head_ack),
-      .ev_linea       (wb_head_linea),
-      .ev_datos       (wb_head_datos),
-      .ev_mascara     (wb_head_mascara),
+      .req            (l2_mem_req),
+      .req_linea      (l2_mem_linea),
+      .listo          (mem_sys_listo),
+      .linea_datos    (mem_sys_linea_datos),
+      .ev_push        (l2_ev_push),
+      .ev_linea       (l2_ev_linea),
+      .ev_datos       (l2_ev_datos),
+      .ev_mascara     (l2_ev_mascara),
       .ev_lleno       (mem_ev_lleno),
       .mem_clk        (mem_sys_clk_obs),
       .ocupado        (mem_sys_ocupado),
@@ -736,7 +795,6 @@ module top #(
       .inicia_lectura (mem_sys_inicia_rd),
       .inicia_drenado (mem_sys_inicia_wr)
   );
-
   // ---------------------------------------------------------------------------
   // El bundle de EX completa, o no
   //
