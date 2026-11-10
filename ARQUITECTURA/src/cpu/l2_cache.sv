@@ -1,6 +1,4 @@
 `timescale 1ns/1ps
-
-
 `include "cerbero_defs.svh"
 
 module l2_cache #(
@@ -79,5 +77,40 @@ module l2_cache #(
       via_acertada = '0;
       for (int v = 0; v < WAYS; v++) begin
           if (acierto_via[v]) via_acertada = v[WAY_W-1:0];
+      end
+  end
+
+  // ===========================================================================
+  // 3. Matriz de Edades y Víctima LRU Exacto
+  // ===========================================================================
+
+  logic [WAY_W-1:0] edades [0:WAYS-1][0:SETS-1];
+  logic [WAY_W-1:0] via_victima;
+
+  // Búsqueda de la víctima: la línea con la edad máxima (WAYS - 1)
+  always_comb begin
+      via_victima = '0;
+      for (int v = 0; v < WAYS; v++) begin
+          if (edades[v][conjunto] == (WAYS - 1)) begin
+              via_victima = v[WAY_W-1:0];
+          end
+      end
+  end
+
+  // ===========================================================================
+  // 4. Lógica de Fusión y Bypass
+  // ===========================================================================
+
+  logic mascara_completa_32B;
+  assign mascara_completa_32B = (req_wmask == {`LINE_MASK_W{1'b1}});
+
+  // Mezcla de datos para Write-Allocate parcial
+  logic [`LINE_W-1:0] datos_mezclados;
+  always_comb begin
+      for (int b = 0; b < `LINE_BYTES; b++) begin
+          if (req_wmask[b])
+              datos_mezclados[b*8 +: 8] = req_wdata[b*8 +: 8];
+          else
+              datos_mezclados[b*8 +: 8] = mem_datos[b*8 +: 8];
       end
   end
