@@ -92,6 +92,20 @@
 // Iteracion 4.
 // =============================================================================
 
+
+// =============================================================================
+// l1_dcache.sv - Cache de datos de primer nivel.
+// CE-4301 Arquitectura de Computadores I - Proyecto Grupal II - Grupo #4
+//
+// 4 KB, 2 vias, linea de 32 bytes, 64 conjuntos. Write-through,
+// no-write-allocate, reemplazo LRU.
+//
+// Implementación del Issue [L2-03]: Invalidación hacia atrás (Política de Inclusión).
+// La L2 notifica a esta L1-D cuando desaloja una línea. Como L1-D es write-through, 
+// todas sus líneas están siempre limpias; invalidar consiste simplemente en buscar
+// la línea reportada y apagar su bit de 'valido'. 
+// =============================================================================
+
 `include "cerbero_defs.svh"
 
 module l1_dcache (
@@ -123,6 +137,11 @@ module l1_dcache (
     input  logic                     mem_listo,
     input  logic [`LINE_W-1:0]       mem_datos,
 
+     // ---- Invalidación Hacia Atrás (L2 -> L1) [ISSUE L2-03] ------------------
+    // La L2 reporta una línea que acaba de ser desalojada. Si la tenemos, la borramos.
+    input  logic                     inv_req,
+    input  logic [`MEM_LIDX_W-1:0]   inv_linea,
+
     // ---- Contadores, para las metricas del enunciado ------------------------
     output logic                     ev_load_hit,
     output logic                     ev_load_miss,
@@ -145,7 +164,7 @@ module l1_dcache (
   logic                  mru      [0:`L1D_SETS-1];
 
   // ===========================================================================
-  // Descomposicion de la direccion
+  // Descomposicion de la direccion LSU
   // ===========================================================================
 
   logic [`L1D_TAG_W-1:0]  tag;
@@ -163,8 +182,16 @@ module l1_dcache (
   logic [`MEM_LIDX_W-1:0] linea_mem;
   assign linea_mem = addr[`LINE_OFF_W + `MEM_LIDX_W - 1 : `LINE_OFF_W];
 
+  // Descomposicion de la direccion de Invalidacion
+  logic [`L1D_TAG_W-1:0]  inv_tag;
+  logic [`L1D_SIDX_W-1:0] inv_conjunto;
+
+  // Como L2 entrega el número de línea completo, se reconstruye el TAG y CONJUNTO local
+  assign inv_tag      = inv_linea[`L1D_TAG_W + `L1D_SIDX_W - 1 : `L1D_SIDX_W];
+  assign inv_conjunto = inv_linea[`L1D_SIDX_W - 1 : 0];
+
   // ===========================================================================
-  // Busqueda
+  // Busqueda Normal LSU
   // ===========================================================================
 
   logic acierto_v0, acierto_v1, acierto;
@@ -179,6 +206,12 @@ module l1_dcache (
   // La via que se va a reemplazar en un relleno: la que NO es la mas usada.
   logic via_victima;
   assign via_victima = ~mru[conjunto];
+
+  // Búsqueda para Invalidación L2 -> L1
+  logic inv_hit_v0, inv_hit_v1;
+  assign inv_hit_v0 = valido[0][inv_conjunto] && (etiqueta[0][inv_conjunto] == inv_tag);
+  assign inv_hit_v1 = valido[1][inv_conjunto] && (etiqueta[1][inv_conjunto] == inv_tag);
+
 
   // ===========================================================================
   // Clasificacion del acceso
@@ -347,6 +380,15 @@ module l1_dcache (
       conjunto_en_vuelo <= '0;
       via_en_vuelo      <= 1'b0;
     end else begin
+
+      // [ISSUE L2-03] Ejecución de Invalidación Hacia Atrás.
+      // Se evalúa concurrentemente con otros eventos. Si la L2 está desalojando una línea, 
+      // revisamos si L1 la tiene almacenada y la invalidamos inmediatamente.
+      if (inv_req) begin
+          if (inv_hit_v0) valido[0][inv_conjunto] <= 1'b0;
+          if (inv_hit_v1) valido[1][inv_conjunto] <= 1'b0;
+      end
+
       case (estado)
 
         ESPERA: begin
@@ -390,6 +432,12 @@ module l1_dcache (
             etiqueta[via_en_vuelo][conjunto_en_vuelo] <= tag_en_vuelo;
             valido  [via_en_vuelo][conjunto_en_vuelo] <= 1'b1;
             mru[conjunto_en_vuelo] <= via_en_vuelo;
+
+            // Caso Borde: si la línea que se acaba de recibir coincide con la que L2 invalidó 
+            // en este mismo ciclo, la invalidación predomina.
+            if (inv_req && inv_conjunto == conjunto_en_vuelo && inv_tag == tag_en_vuelo) begin
+                 valido[via_en_vuelo][conjunto_en_vuelo] <= 1'b0;
+            end
 
             rdata  <= palabra_leida;
             estado <= ESPERA;

@@ -10,6 +10,12 @@
 // - Máquina de estados con políticas Write-Back y Write-Allocate.
 // - Optimización de latencia: bypass de memoria en sobrescrituras de 32B.
 //
+// Implementación del Issue [L2-03]: Invalidación hacia atrás.
+// - Se exponen 'l2_inv_req' y 'l2_inv_linea' hacia L1-D.
+// - Cuando una línea válida se desaloja de L2 (ya sea a EVICT por estar sucia o
+//   se sobreescribe limpiamente en ACTUALIZAR), la señal l2_inv_req se levanta 
+//   para forzar a la L1 a descartarla.
+//
 // Esta caché se interpone entre las cachés L1 (y sus Write Buffers) y el 
 // subsistema de memoria principal (mem_system.sv).
 // =============================================================================
@@ -32,6 +38,10 @@ module l2_cache #(
     
     output logic [`LINE_W-1:0]       rdata,
     output logic                     listo,
+
+    // ---- Interfaz hacia arriba (Invalidación Hacia Atrás para L1-D) ---------
+    output logic                     l2_inv_req,
+    output logic [`MEM_LIDX_W-1:0]   l2_inv_linea,
 
     // ---- Interfaz hacia abajo (Memoria Principal para lecturas/rellenos) ----
     output logic                     mem_req,
@@ -210,7 +220,14 @@ module l2_cache #(
   assign ev_datos   = datos[via_victima][conjunto];
   assign ev_mascara = {`LINE_MASK_W{1'b1}}; // L2 siempre expulsa líneas enteras
 
-  // Hacia arriba (L1)
+  // Hacia arriba (L1 - Invalidación Hacia Atrás)
+  // Se reporta la línea que se reemplazará si la víctima era una entrada válida, 
+  // independientemente de si estaba sucia (EVICT) o limpia (ALLOCATE -> ACTUALIZAR).
+  assign l2_inv_req   = (estado == ACTUALIZAR && valido[via_victima][conjunto]) || 
+                        (estado == EVALUAR && proximo_estado == EVICT);
+  assign l2_inv_linea = {etiqueta[via_victima][conjunto], conjunto};
+
+  // Hacia arriba (L1 - Respuestas)
   assign listo = ((estado == EVALUAR) && acierto) || (estado == ACTUALIZAR);
   assign rdata = acierto ? datos[via_acertada][conjunto] : datos_mezclados;
 

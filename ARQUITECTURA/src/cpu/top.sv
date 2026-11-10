@@ -616,11 +616,15 @@ module top #(
   logic [`MEM_LIDX_W-1:0]  wb_consulta;
   logic                    wb_conflicto;
 
-// ---- Cache L1 -> Arbitro L2 (relleno) --------------------------------------
+  // ---- Cache L1 -> Arbitro L2 (relleno) --------------------------------------
   logic                    l1_mem_req;
   logic [`MEM_LIDX_W-1:0]  l1_mem_linea;
   logic                    l1_mem_listo;
   logic [`LINE_W-1:0]      l1_mem_datos;
+
+  // ---- Invalidación Hacia Atrás (L2 -> L1) [ISSUE L2-03] ---------------------
+  logic                    l2_inv_req;
+  logic [`MEM_LIDX_W-1:0]  l2_inv_linea;
 
   // ---- Eventos para los contadores -------------------------------------------
   logic ev_load_hit, ev_load_miss, ev_store_hit, ev_store_miss;
@@ -654,6 +658,8 @@ module top #(
       .mem_linea     (l1_mem_linea),
       .mem_listo     (l1_mem_listo),
       .mem_datos     (l1_mem_datos),
+      .inv_req       (l2_inv_req),     // <--- CONEXIÓN ISSUE L2-03
+      .inv_linea     (l2_inv_linea),   // <--- CONEXIÓN ISSUE L2-03
       .ev_load_hit   (ev_load_hit),
       .ev_load_miss  (ev_load_miss),
       .ev_store_hit  (ev_store_hit),
@@ -670,6 +676,7 @@ module top #(
   logic [`LINE_W-1:0]      wb_head_datos;
   logic [`LINE_MASK_W-1:0] wb_head_mascara;
   logic                    wb_head_ack;
+  logic                    wb_head_ocupada;
   logic                    wb_vacio;
   logic [`EVICT_IDX_W:0]   wb_ocupadas;
 
@@ -694,7 +701,7 @@ module top #(
       .ocupadas       (wb_ocupadas)
   );
 
-// ---- Arbitro L2 ------------------------------------------------------------
+  // ---- Arbitro L2 ------------------------------------------------------------
   logic                     l2_req_lectura;
   logic                     l2_req_escritura;
   logic [`MEM_LIDX_W-1:0]   l2_req_linea;
@@ -751,6 +758,8 @@ module top #(
       .req_wmask        (l2_req_wmask),
       .rdata            (l2_rdata),
       .listo            (l2_listo),
+      .l2_inv_req       (l2_inv_req),    // <--- CONEXIÓN ISSUE L2-03
+      .l2_inv_linea     (l2_inv_linea),  // <--- CONEXIÓN ISSUE L2-03
       .mem_req          (l2_mem_req),
       .mem_linea        (l2_mem_linea),
       .mem_listo        (mem_sys_listo),
@@ -769,6 +778,7 @@ module top #(
   logic mem_sys_inicia_rd, mem_sys_inicia_wr;
 
   // 5. Instancia del Subsistema de Memoria Principal (Envoltorio)
+
   // El tamano sale del parametro NUM_WORDS del procesador, no de la constante
   // MEM_WORDS. Hasta la Iteracion 2 ese parametro dimensionaba la dmem; al
   // reemplazarla por la jerarquia hay que seguir respetandolo, porque varios
@@ -795,6 +805,7 @@ module top #(
       .inicia_lectura (mem_sys_inicia_rd),
       .inicia_drenado (mem_sys_inicia_wr)
   );
+  
   // ---------------------------------------------------------------------------
   // El bundle de EX completa, o no
   //
