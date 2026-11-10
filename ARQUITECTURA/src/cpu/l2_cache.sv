@@ -1,4 +1,19 @@
 `timescale 1ns/1ps
+
+// =============================================================================
+// l2_cache.sv - Cache unificada de segundo nivel (N-Vías, LRU exacto).
+// CE-4301 Arquitectura de Computadores I - Proyecto Grupal II - Grupo #4
+//
+// Implementación del Issue [L2-01]:
+// - Generalización a N-vías paramétrica (bloques generate).
+// - Política de reemplazo LRU exacto mediante matriz de edades.
+// - Máquina de estados con políticas Write-Back y Write-Allocate.
+// - Optimización de latencia: bypass de memoria en sobrescrituras de 32B.
+//
+// Esta caché se interpone entre las cachés L1 (y sus Write Buffers) y el 
+// subsistema de memoria principal (mem_system.sv).
+// =============================================================================
+
 `include "cerbero_defs.svh"
 
 module l2_cache #(
@@ -180,3 +195,102 @@ module l2_cache #(
           default: proximo_estado = ESPERA;
       endcase
   end
+
+  // ===========================================================================
+  // 6. Señales de Control e Interfaz
+  // ===========================================================================
+
+  // Hacia la memoria principal (lectura)
+  assign mem_req   = (estado == ALLOCATE) && !(req_escritura && mascara_completa_32B);
+  assign mem_linea = req_linea;
+
+  // Hacia el eviction buffer (desalojo)
+  assign ev_push    = (estado == EVICT) && !ev_lleno;
+  assign ev_linea   = {etiqueta[via_victima][conjunto], conjunto};
+  assign ev_datos   = datos[via_victima][conjunto];
+  assign ev_mascara = {`LINE_MASK_W{1'b1}}; // L2 siempre expulsa líneas enteras
+
+  // Hacia arriba (L1)
+  assign listo = ((estado == EVALUAR) && acierto) || (estado == ACTUALIZAR);
+  assign rdata = acierto ? datos[via_acertada][conjunto] : datos_mezclados;
+
+  // ===========================================================================
+  // 7. Lógica Secuencial (Actualización de Datos y LRU)
+  // ===========================================================================
+
+  integer v, s;
+
+  always_ff @(posedge clk) begin
+      if (!rst_n) begin
+          contador_latencia <= '0;
+          for (v = 0; v < WAYS; v++) begin
+              for (s = 0; s < SETS; s++) begin
+                  valido[v][s] <= 1'b0;
+                  sucio[v][s]  <= 1'b0;
+                  edades[v][s] <= v[WAY_W-1:0]; // Inicialización escalonada del LRU
+              end
+          end
+      end else begin
+          case (estado)
+              ESPERA: begin
+                  if (req_lectura || req_escritura) begin
+                      contador_latencia <= 3'd7; // 8 ciclos de penalización de hit
+                  end
+              end
+              
+              LATENCIA: begin
+                  contador_latencia <= contador_latencia - 1'b1;
+              end
+              
+              EVALUAR: begin
+                  if (acierto) begin
+                      // ---- UPDATE HIT: Datos y Suciedad ----
+                      if (req_escritura) begin
+                          sucio[via_acertada][conjunto] <= 1'b1;
+                          for (int b = 0; b < `LINE_BYTES; b++) begin
+                              if (req_wmask[b]) 
+                                  datos[via_acertada][conjunto][b*8 +: 8] <= req_wdata[b*8 +: 8];
+                          end
+                      end
+                      
+                      // ---- UPDATE HIT: Edades LRU ----
+                      for (int v = 0; v < WAYS; v++) begin
+                          if (v == via_acertada) begin
+                              edades[v][conjunto] <= '0; // Rejuvenece a 0
+                          end else if (edades[v][conjunto] < edades[via_acertada][conjunto]) begin
+                              edades[v][conjunto] <= edades[v][conjunto] + 1'b1; // Envejecen los más recientes
+                          end
+                      end
+                  end
+              end
+
+              ACTUALIZAR: begin
+                  // ---- UPDATE MISS: Insertar nueva línea en la víctima ----
+                  valido[via_victima][conjunto]   <= 1'b1;
+                  etiqueta[via_victima][conjunto] <= tag_buscado;
+                  
+                  if (req_escritura) begin
+                      sucio[via_victima][conjunto] <= 1'b1;
+                      if (mascara_completa_32B)
+                          datos[via_victima][conjunto] <= req_wdata;
+                      else
+                          datos[via_victima][conjunto] <= datos_mezclados;
+                  end else begin
+                      sucio[via_victima][conjunto] <= 1'b0;
+                      datos[via_victima][conjunto] <= mem_datos;
+                  end
+
+                  // ---- UPDATE MISS: Edades LRU ----
+                  for (int v = 0; v < WAYS; v++) begin
+                      if (v == via_victima) begin
+                          edades[v][conjunto] <= '0; // La víctima pasa a ser la más joven
+                      end else begin
+                          edades[v][conjunto] <= edades[v][conjunto] + 1'b1; // El resto envejece inevitablemente
+                      end
+                  end
+              end
+          endcase
+      end
+  end
+
+endmodule
