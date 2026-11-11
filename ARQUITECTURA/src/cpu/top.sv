@@ -777,7 +777,7 @@ module top #(
       .ev_datos         (l2_ev_datos),
       .ev_mascara       (l2_ev_mascara),
       .ev_lleno         (mem_ev_lleno),
-      .ev_stall_evict   (l2_ev_stall) // <--- NUEVO [L2-04]: Conexión del evento
+      .ev_stall_evict   (l2_ev_stall), // <--- NUEVO [L2-04]: Conexión del evento
       .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
       .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
       .ev_l2_store_hit  (l2_ev_store_hit),  // <--- NUEVO [L2-05]
