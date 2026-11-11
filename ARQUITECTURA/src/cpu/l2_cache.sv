@@ -54,14 +54,14 @@ module l2_cache #(
     output logic [`MEM_LIDX_W-1:0]   ev_linea,
     output logic [`LINE_W-1:0]       ev_datos,
     output logic [`LINE_MASK_W-1:0]  ev_mascara,
-    input  logic                     ev_lleno
+    input  logic                     ev_lleno,
 
     // ---- Contadores de rendimiento [ISSUE L2-04 y L2-05] --------------------
     output logic                     ev_stall_evict,
     output logic                     ev_l2_load_hit,
     output logic                     ev_l2_load_miss,
     output logic                     ev_l2_store_hit,
-    output logic                     ev_l2_store_miss,
+    output logic                     ev_l2_store_miss
 );
 
   // ===========================================================================

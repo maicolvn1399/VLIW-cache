@@ -122,6 +122,11 @@ module tb_l2_cache();
       req_escritura = 0;
   endtask
 
+  initial begin
+    $dumpfile("tb_l2_cache.vcd");
+    $dumpvars(0, tb_l2_cache);
+  end
+
   // ---- Secuencia de Pruebas ----
   initial begin
       $display("Iniciando Pruebas de Caché L2...");

@@ -12,6 +12,8 @@
 #   make list           -> lista las unidades con testbench
 #   make clean          -> borra .vvp y .vcd
 #
+#   make jerarquia      -> corre las pruebas de la jerarquia de memoria (Iteracion 4)
+#
 # Convencion (para que funcione sin tocar este archivo):
 #   - Modulo:     ../cpu/<unidad>.sv        (ej. ../cpu/alu.sv)
 #   - Testbench:  ../tb/tb_<unidad>.sv      (ej. ../tb/tb_alu.sv, modulo tb_alu)
@@ -73,6 +75,9 @@ SUB_mem_system := $(CPU)/mem_clock_gen.sv $(CPU)/main_memory.sv \
 # La cache se prueba contra el write buffer de verdad (eviction_buffer.sv), que
 # es el que top.sv le va a poner al lado, y no contra un modelo simplificado.
 SUB_l1_dcache := $(CPU)/eviction_buffer.sv
+# La cache L2 de la Iteracion 4 no instancia otros submódulos internamente; 
+# toda su integración con el eviction buffer ocurre estructuralmente en top.sv.
+SUB_l2_cache := 
 
 # ---- Dependencias extra por unidad (agregar aqui) ---------------------------
 DEPS_crypto_unit  := $(TB)/key_vault_model.sv
@@ -494,6 +499,16 @@ etapas: reg_if_id reg_id_ex reg_ex_mem pipeline latency fetch fetch_flow wconf t
 	@echo ""
 	@echo "=============================================================="
 	@echo " Las cinco etapas, cada frontera y la latencia: todo verificado"
+	@echo "=============================================================="
+
+# ---- Jerarquía de Memoria (Iteraciones 2, 3 y 4) ----------------------------
+# Corre los testbenches de la jerarquía de memoria (L1-D, L2 y memoria principal).
+# Ideal para probar tu avance de la Iteración 4 con un solo comando.
+.PHONY: jerarquia
+jerarquia: mem_system l1_dcache l2_cache
+	@echo ""
+	@echo "=============================================================="
+	@echo " Sistema de memoria completo verificado (L1-D, L2, Principal) "
 	@echo "=============================================================="
 
 # ---- Ocupacion de los bundles y empaquetado ---------------------------------
