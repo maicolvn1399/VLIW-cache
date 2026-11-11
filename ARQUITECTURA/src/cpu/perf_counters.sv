@@ -99,7 +99,7 @@ module perf_counters #(
     input  logic halted,  // despues de HALT ya no se cuentan ciclos
     input  logic stall,   // el pipeline esta congelado por la jerarquia
 
-    // ---- Eventos de la cache L1-D (Iteracion 3) -----------------------------
+    // ---- Eventos de la cache L1-D (Iteracion 3) y L2 (Iteracion 4) -----------
     // Son pulsos de un ciclo que produce l1_dcache.sv. Se cuentan aqui, y no
     // alla, para que toda cuenta del procesador pase por la misma logica de
     // saturacion: un contador que da la vuelta en silencio es el error que
@@ -111,6 +111,7 @@ module perf_counters #(
     input  logic ev_stall_miss,
     input  logic ev_stall_wb,
     input  logic ev_stall_raw,
+    input  logic ev_stall_evict, // <--- NUEVO [L2-04]: Stall por Eviction Buffer lleno
 
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
@@ -129,7 +130,7 @@ module perf_counters #(
     output logic [CNT_W-1:0] delay_vacios,    // delay slots que no traian trabajo
     output logic [CNT_W-1:0] ciclos_stall,    // ciclos perdidos por stalls
 
-    // ---- Cache L1-D ----------------------------------------------------------
+    // ---- Cache L1-D y L2 ----------------------------------------------------
     output logic [CNT_W-1:0] l1_load_hit,
     output logic [CNT_W-1:0] l1_load_miss,
     output logic [CNT_W-1:0] l1_store_hit,
@@ -137,6 +138,7 @@ module perf_counters #(
     output logic [CNT_W-1:0] stall_por_miss,
     output logic [CNT_W-1:0] stall_por_wb,
     output logic [CNT_W-1:0] stall_por_raw,
+    output logic [CNT_W-1:0] stall_por_evict, // <--- NUEVO [L2-04]
 
     output logic desbordado  // pegajoso: algun contador llego al tope
 );
@@ -223,7 +225,7 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 21;
+  localparam int NCONT = 22; // <--- MODIFICADO [L2-04]: 21 a 22 contadores
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -242,6 +244,7 @@ module perf_counters #(
   localparam int C_SM_MISS  = 18;
   localparam int C_SM_WB    = 19;
   localparam int C_SM_RAW   = 20;
+  localparam int C_SM_EVICT = 21; // <--- NUEVO [L2-04]
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
@@ -275,14 +278,15 @@ module perf_counters #(
     // 'ciclos' sigue la convencion de la Iteracion 1 y se detiene en el HALT.
     // Los dos criterios solo se separan por esos ultimos bundles.
     if (rst_n) begin
-      if (stall)         inc[C_STALL]   = 3'd1;
-      if (ev_load_hit)   inc[C_L1_LDH]  = 3'd1;
-      if (ev_load_miss)  inc[C_L1_LDM]  = 3'd1;
-      if (ev_store_hit)  inc[C_L1_STH]  = 3'd1;
-      if (ev_store_miss) inc[C_L1_STM]  = 3'd1;
-      if (ev_stall_miss) inc[C_SM_MISS] = 3'd1;
-      if (ev_stall_wb)   inc[C_SM_WB]   = 3'd1;
-      if (ev_stall_raw)  inc[C_SM_RAW]  = 3'd1;
+      if (stall)          inc[C_STALL]   = 3'd1;
+      if (ev_load_hit)    inc[C_L1_LDH]  = 3'd1;
+      if (ev_load_miss)   inc[C_L1_LDM]  = 3'd1;
+      if (ev_store_hit)   inc[C_L1_STH]  = 3'd1;
+      if (ev_store_miss)  inc[C_L1_STM]  = 3'd1;
+      if (ev_stall_miss)  inc[C_SM_MISS] = 3'd1;
+      if (ev_stall_wb)    inc[C_SM_WB]   = 3'd1;
+      if (ev_stall_raw)   inc[C_SM_RAW]  = 3'd1;
+      if (ev_stall_evict) inc[C_SM_EVICT]= 3'd1; // <--- NUEVO [L2-04]
     end
 
     if (avanza) begin
@@ -338,13 +342,14 @@ module perf_counters #(
   assign accesos_load   = cont[C_LOAD];
   assign accesos_store  = cont[C_STORE];
 
-  assign l1_load_hit    = cont[C_L1_LDH];
-  assign l1_load_miss   = cont[C_L1_LDM];
-  assign l1_store_hit   = cont[C_L1_STH];
-  assign l1_store_miss  = cont[C_L1_STM];
-  assign stall_por_miss = cont[C_SM_MISS];
-  assign stall_por_wb   = cont[C_SM_WB];
-  assign stall_por_raw  = cont[C_SM_RAW];
+  assign l1_load_hit     = cont[C_L1_LDH];
+  assign l1_load_miss    = cont[C_L1_LDM];
+  assign l1_store_hit    = cont[C_L1_STH];
+  assign l1_store_miss   = cont[C_L1_STM];
+  assign stall_por_miss  = cont[C_SM_MISS];
+  assign stall_por_wb    = cont[C_SM_WB];
+  assign stall_por_raw   = cont[C_SM_RAW];
+  assign stall_por_evict = cont[C_SM_EVICT]; // <--- NUEVO [L2-04]
 
   genvar g;
   generate

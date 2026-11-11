@@ -55,6 +55,9 @@ module l2_cache #(
     output logic [`LINE_W-1:0]       ev_datos,
     output logic [`LINE_MASK_W-1:0]  ev_mascara,
     input  logic                     ev_lleno
+
+    // ---- Contadores de rendimiento [ISSUE L2-04] ----------------------------
+    output logic                     ev_stall_evict
 );
 
   // ===========================================================================
@@ -219,6 +222,10 @@ module l2_cache #(
   assign ev_linea   = {etiqueta[via_victima][conjunto], conjunto};
   assign ev_datos   = datos[via_victima][conjunto];
   assign ev_mascara = {`LINE_MASK_W{1'b1}}; // L2 siempre expulsa líneas enteras
+
+  // El L2 se detiene si necesita expulsar una línea pero el Eviction Buffer
+  // de la memoria principal está lleno. Esto genera el contador 22.
+  assign ev_stall_evict = (estado == EVICT) && ev_lleno;
 
   // Hacia arriba (L1 - Invalidación Hacia Atrás)
   // Se reporta la línea que se reemplazará si la víctima era una entrada válida, 

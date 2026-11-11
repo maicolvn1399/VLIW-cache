@@ -154,6 +154,7 @@ module top #(
     output logic [31:0]                   perf_stall_miss,
     output logic [31:0]                   perf_stall_wb,
     output logic [31:0]                   perf_stall_raw,
+    output logic [31:0]                   perf_stall_evict, // <--- NUEVO [L2-04]
 
     // El sistema termino: el procesador se detuvo, no queda ningun bundle en
     // vuelo y toda escritura llego a la memoria principal.
@@ -743,6 +744,7 @@ module top #(
   logic                     mem_sys_listo;
   logic [`LINE_W-1:0]       mem_sys_linea_datos;
   logic                     mem_ev_lleno;
+  logic                     l2_ev_stall; // <--- NUEVO [L2-04]: Cable para llevar el evento al contador
 
   // 4. Instancia de la Caché L2
   l2_cache #(
@@ -768,7 +770,8 @@ module top #(
       .ev_linea         (l2_ev_linea),
       .ev_datos         (l2_ev_datos),
       .ev_mascara       (l2_ev_mascara),
-      .ev_lleno         (mem_ev_lleno)
+      .ev_lleno         (mem_ev_lleno),
+      .ev_stall_evict   (l2_ev_stall) // <--- NUEVO [L2-04]: Conexión del evento
   );
 
   // ---- Memoria principal ------------------------------------------------------
@@ -1056,6 +1059,7 @@ module top #(
       .ev_stall_miss  (ev_stall_miss),
       .ev_stall_wb    (ev_stall_wb),
       .ev_stall_raw   (ev_stall_raw),
+      .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
       .ciclos         (perf_ciclos),
       .bundles        (perf_bundles),
       .instrucciones  (perf_instrucciones),
@@ -1073,6 +1077,7 @@ module top #(
       .stall_por_miss (perf_stall_miss),
       .stall_por_wb   (perf_stall_wb),
       .stall_por_raw  (perf_stall_raw),
+      .stall_por_evict(perf_stall_evict), // <--- NUEVO [L2-04]: Salida hacia el testbench
       .desbordado     (perf_desbordado)
   );
 
