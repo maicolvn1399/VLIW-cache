@@ -112,6 +112,10 @@ module perf_counters #(
     input  logic ev_stall_wb,
     input  logic ev_stall_raw,
     input  logic ev_stall_evict, // <--- NUEVO [L2-04]: Stall por Eviction Buffer lleno
+    input  logic ev_l2_load_hit,  // <--- NUEVO [L2-05]
+    input  logic ev_l2_load_miss, // <--- NUEVO [L2-05]
+    input  logic ev_l2_store_hit, // <--- NUEVO [L2-05]
+    input  logic ev_l2_store_miss,// <--- NUEVO [L2-05]
 
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
@@ -139,6 +143,10 @@ module perf_counters #(
     output logic [CNT_W-1:0] stall_por_wb,
     output logic [CNT_W-1:0] stall_por_raw,
     output logic [CNT_W-1:0] stall_por_evict, // <--- NUEVO [L2-04]
+    output logic [CNT_W-1:0] l2_load_hit,     // <--- NUEVO [L2-05]
+    output logic [CNT_W-1:0] l2_load_miss,    // <--- NUEVO [L2-05]
+    output logic [CNT_W-1:0] l2_store_hit,    // <--- NUEVO [L2-05]
+    output logic [CNT_W-1:0] l2_store_miss,   // <--- NUEVO [L2-05]
 
     output logic desbordado  // pegajoso: algun contador llego al tope
 );
@@ -225,7 +233,7 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 22; // <--- MODIFICADO [L2-04]: 21 a 22 contadores
+  localparam int NCONT = 26; // <--- MODIFICADO [L2-05]: Sube a 26 contadores
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -245,6 +253,10 @@ module perf_counters #(
   localparam int C_SM_WB    = 19;
   localparam int C_SM_RAW   = 20;
   localparam int C_SM_EVICT = 21; // <--- NUEVO [L2-04]
+  localparam int C_L2_LDH   = 22; // <--- NUEVO [L2-05]
+  localparam int C_L2_LDM   = 23; // <--- NUEVO [L2-05]
+  localparam int C_L2_STH   = 24; // <--- NUEVO [L2-05]
+  localparam int C_L2_STM   = 25; // <--- NUEVO [L2-05]
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
@@ -287,6 +299,10 @@ module perf_counters #(
       if (ev_stall_wb)    inc[C_SM_WB]   = 3'd1;
       if (ev_stall_raw)   inc[C_SM_RAW]  = 3'd1;
       if (ev_stall_evict) inc[C_SM_EVICT]= 3'd1; // <--- NUEVO [L2-04]
+      if (ev_l2_load_hit)   inc[C_L2_LDH] = 3'd1; // <--- NUEVO [L2-05]
+      if (ev_l2_load_miss)  inc[C_L2_LDM] = 3'd1; // <--- NUEVO [L2-05]
+      if (ev_l2_store_hit)  inc[C_L2_STH] = 3'd1; // <--- NUEVO [L2-05]
+      if (ev_l2_store_miss) inc[C_L2_STM] = 3'd1; // <--- NUEVO [L2-05]
     end
 
     if (avanza) begin
@@ -350,6 +366,10 @@ module perf_counters #(
   assign stall_por_wb    = cont[C_SM_WB];
   assign stall_por_raw   = cont[C_SM_RAW];
   assign stall_por_evict = cont[C_SM_EVICT]; // <--- NUEVO [L2-04]
+  assign l2_load_hit     = cont[C_L2_LDH]; // <--- NUEVO [L2-05]
+  assign l2_load_miss    = cont[C_L2_LDM]; // <--- NUEVO [L2-05]
+  assign l2_store_hit    = cont[C_L2_STH]; // <--- NUEVO [L2-05]
+  assign l2_store_miss   = cont[C_L2_STM]; // <--- NUEVO [L2-05]
 
   genvar g;
   generate

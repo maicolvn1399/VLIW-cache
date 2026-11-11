@@ -56,8 +56,12 @@ module l2_cache #(
     output logic [`LINE_MASK_W-1:0]  ev_mascara,
     input  logic                     ev_lleno
 
-    // ---- Contadores de rendimiento [ISSUE L2-04] ----------------------------
-    output logic                     ev_stall_evict
+    // ---- Contadores de rendimiento [ISSUE L2-04 y L2-05] --------------------
+    output logic                     ev_stall_evict,
+    output logic                     ev_l2_load_hit,
+    output logic                     ev_l2_load_miss,
+    output logic                     ev_l2_store_hit,
+    output logic                     ev_l2_store_miss,
 );
 
   // ===========================================================================
@@ -237,6 +241,14 @@ module l2_cache #(
   // Hacia arriba (L1 - Respuestas)
   assign listo = ((estado == EVALUAR) && acierto) || (estado == ACTUALIZAR);
   assign rdata = acierto ? datos[via_acertada][conjunto] : datos_mezclados;
+
+  // ---- Eventos de Rendimiento L2 [ISSUE L2-05] ----
+  // Los eventos ocurren exclusivamente en el estado EVALUAR, donde 
+  // la caché resuelve si la petición entrante es un hit o un miss.
+  assign ev_l2_load_hit   = (estado == EVALUAR) && req_lectura   &&  acierto;
+  assign ev_l2_load_miss  = (estado == EVALUAR) && req_lectura   && !acierto;
+  assign ev_l2_store_hit  = (estado == EVALUAR) && req_escritura &&  acierto;
+  assign ev_l2_store_miss = (estado == EVALUAR) && req_escritura && !acierto;
 
   // ===========================================================================
   // 7. Lógica Secuencial (Actualización de Datos y LRU)

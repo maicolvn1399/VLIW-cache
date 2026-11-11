@@ -155,6 +155,11 @@ module top #(
     output logic [31:0]                   perf_stall_wb,
     output logic [31:0]                   perf_stall_raw,
     output logic [31:0]                   perf_stall_evict, // <--- NUEVO [L2-04]
+    // ---- Métricas de la cache L2 (Iteración 4) [ISSUE L2-05] --------------
+    output logic [31:0]                   perf_l2_load_hit,
+    output logic [31:0]                   perf_l2_load_miss,
+    output logic [31:0]                   perf_l2_store_hit,
+    output logic [31:0]                   perf_l2_store_miss,
 
     // El sistema termino: el procesador se detuvo, no queda ningun bundle en
     // vuelo y toda escritura llego a la memoria principal.
@@ -745,6 +750,7 @@ module top #(
   logic [`LINE_W-1:0]       mem_sys_linea_datos;
   logic                     mem_ev_lleno;
   logic                     l2_ev_stall; // <--- NUEVO [L2-04]: Cable para llevar el evento al contador
+  logic l2_ev_load_hit, l2_ev_load_miss, l2_ev_store_hit, l2_ev_store_miss; // <--- NUEVO [L2-05]
 
   // 4. Instancia de la Caché L2
   l2_cache #(
@@ -772,6 +778,10 @@ module top #(
       .ev_mascara       (l2_ev_mascara),
       .ev_lleno         (mem_ev_lleno),
       .ev_stall_evict   (l2_ev_stall) // <--- NUEVO [L2-04]: Conexión del evento
+      .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
+      .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
+      .ev_l2_store_hit  (l2_ev_store_hit),  // <--- NUEVO [L2-05]
+      .ev_l2_store_miss (l2_ev_store_miss)  // <--- NUEVO [L2-05]
   );
 
   // ---- Memoria principal ------------------------------------------------------
@@ -1060,6 +1070,10 @@ module top #(
       .ev_stall_wb    (ev_stall_wb),
       .ev_stall_raw   (ev_stall_raw),
       .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
+      .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
+      .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
+      .ev_l2_store_hit  (l2_ev_store_hit),  // <--- NUEVO [L2-05]
+      .ev_l2_store_miss (l2_ev_store_miss), // <--- NUEVO [L2-05]
       .ciclos         (perf_ciclos),
       .bundles        (perf_bundles),
       .instrucciones  (perf_instrucciones),
@@ -1078,6 +1092,10 @@ module top #(
       .stall_por_wb   (perf_stall_wb),
       .stall_por_raw  (perf_stall_raw),
       .stall_por_evict(perf_stall_evict), // <--- NUEVO [L2-04]: Salida hacia el testbench
+      .l2_load_hit    (perf_l2_load_hit),   // <--- NUEVO [L2-05]
+      .l2_load_miss   (perf_l2_load_miss),  // <--- NUEVO [L2-05]
+      .l2_store_hit   (perf_l2_store_hit),  // <--- NUEVO [L2-05]
+      .l2_store_miss  (perf_l2_store_miss), // <--- NUEVO [L2-05]
       .desbordado     (perf_desbordado)
   );
 
