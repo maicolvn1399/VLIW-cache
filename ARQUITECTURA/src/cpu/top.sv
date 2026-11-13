@@ -749,13 +749,24 @@ module top #(
   logic                     mem_sys_listo;
   logic [`LINE_W-1:0]       mem_sys_linea_datos;
   logic                     mem_ev_lleno;
+  // ---- Vaciado de la L2 al terminar el programa -----------------------------
+  // La L2 es write-back, asi que al llegar a HALT puede quedar dato valido que
+  // nunca bajo a memoria principal. Se le pide vaciarse cuando el procesador ya
+  // se detuvo y no queda nada en vuelo aguas arriba; mientras no termine,
+  // mem_drenada no se levanta y ningun testbench compara la memoria antes de
+  // tiempo.
+  logic l2_vaciar, l2_tiene_sucias;
+
+  assign l2_vaciar = halted && !id_valid && !ex_valid && !mem_valid
+                  && !cache_stall && wb_vacio;
+
   logic                     l2_ev_stall; // <--- NUEVO [L2-04]: Cable para llevar el evento al contador
   logic l2_ev_load_hit, l2_ev_load_miss, l2_ev_store_hit, l2_ev_store_miss; // <--- NUEVO [L2-05]
 
   // 4. Instancia de la Caché L2
   l2_cache #(
-      .WAYS(4),
-      .SETS(128)
+      .WAYS(`L2_WAYS),
+      .SETS(`L2_SETS)
   ) u_l2_cache (
       .clk              (clk),
       .rst_n            (rst_n),
@@ -768,6 +779,8 @@ module top #(
       .listo            (l2_listo),
       .l2_inv_req       (l2_inv_req),    // <--- CONEXIÓN ISSUE L2-03
       .l2_inv_linea     (l2_inv_linea),  // <--- CONEXIÓN ISSUE L2-03
+      .vaciar           (l2_vaciar),
+      .tiene_sucias     (l2_tiene_sucias),
       .mem_req          (l2_mem_req),
       .mem_linea        (l2_mem_linea),
       .mem_listo        (mem_sys_listo),
@@ -839,6 +852,7 @@ module top #(
                     && !mem_valid
                     && !cache_stall                  // ni un acceso esperando
                     && wb_vacio                      // el write buffer se vacio
+                    && !l2_tiene_sucias              // la L2 ya no retiene nada
                     && mem_sys_ev_vacio              // el eviction buffer tambien
                     && !mem_sys_ocupado;             // y el bus no esta en uso
 

@@ -1,0 +1,129 @@
+=== resultado de fibonacci.s ===
+
+  el programa llego a HALT en 382 ciclos, 382 bundles ejecutados
+
+  metricas de rendimiento (contadores de hardware)
+    ciclos de ejecucion                 382
+    bundles ejecutados                  382
+    instrucciones ejecutadas            381
+    IPC  (instrucciones/ciclo)        0.997
+    bundles por ciclo                 1.000
+    ocupacion del bundle               1.00  de 5 ranuras
+    bundles vacios (puros NOP)          238
+    saltos tomados                       46
+    delay slots desperdiciados           46
+    ciclos perdidos por stalls            0
+
+  cache L1-D (8192 B, 2 vias, 128 conjuntos, lineas de 32 B,
+              write-through, no-write-allocate, LRU)
+    accesos totales                      47
+      lecturas: aciertos                  0
+      lecturas: fallos                    0
+      escrituras: aciertos                0
+      escrituras: fallos                 47
+    tasa de aciertos                  0.00%
+    tasa de fallos                  100.00%
+    penalidad medida por fallo          0.0 ciclos  (T_mem = 53)
+    AMAT                               1.00 ciclos
+
+    ciclos perdidos, por causa
+      fallo de lectura                    0
+      write buffer lleno                  0
+      conflicto RAW                       0
+      eviction buffer lleno               0
+      total                               0
+
+  cache L2 unificada (16 KB, 4 vias, 128 conjuntos, write-back,
+                      write-allocate, LRU exacto, hit time 8)
+    accesos totales                      12
+      lecturas: aciertos                  0
+      lecturas: fallos                    0
+      escrituras: aciertos                6
+      escrituras: fallos                  6
+    tasa de aciertos                 50.00%
+    ok     suma de causas = stalls 0
+    ok     accesos L1 = loads + stores 47
+
+    ocupacion por ranura
+      S0 ALU-0         96
+      S1 ALU-1         96
+      S2 LSU           47   (0 loads, 47 stores)
+      S3 cripto        94
+      S4 BRU           48
+
+  los contadores contra la cuenta del testbench
+    ok     ciclos                 382
+    ok     bundles                382
+    ok     instrucciones          381
+    ok     ranura S0              96
+    ok     ranura S1              96
+    ok     ranura S2              47
+    ok     ranura S3              94
+    ok     ranura S4              48
+    ok     loads                  0
+    ok     stores                 47
+    ok     loads + stores = S2    47
+
+  registros
+    r0  = 00000000            0        r1  = b11924e1  -1323752223
+    r2  = 1e8d0a40    512559680        r3  = 00000000            0
+    r4  = 000001bc          444        r5  = 1e8d0a40    512559680
+    r6  = 00000000            0        r7  = 00000000            0
+    r8  = 00000000            0        r9  = 00000000            0
+    r10 = 00000000            0        r11 = 00000000            0
+    r12 = 00000000            0        r13 = 00000000            0
+    r14 = 00000000            0        r15 = 00000000            0
+
+  PSW = 00000001
+    banderas  Z=1 N=0 C=0 V=0
+    boveda    AUTH=0 AUTHFAIL=0
+    fallas    EXC=0 CAUSE=ninguna
+
+  memoria escrita por el programa: 46 palabras, de 0x00000104 a 0x000001b8
+    direccion   antes     ahora     ahora (decimal)
+    0x00000104  00000000  00000001            1
+    0x00000108  00000000  00000001            1
+    0x0000010c  00000000  00000002            2
+    0x00000110  00000000  00000003            3
+    0x00000114  00000000  00000005            5
+    0x00000118  00000000  00000008            8
+    0x0000011c  00000000  0000000d           13
+    0x00000120  00000000  00000015           21
+    0x00000124  00000000  00000022           34
+    0x00000128  00000000  00000037           55
+    0x0000012c  00000000  00000059           89
+    0x00000130  00000000  00000090          144
+    0x00000134  00000000  000000e9          233
+    0x00000138  00000000  00000179          377
+    0x0000013c  00000000  00000262          610
+    0x00000140  00000000  000003db          987
+    0x00000144  00000000  0000063d         1597
+    0x00000148  00000000  00000a18         2584
+    0x0000014c  00000000  00001055         4181
+    0x00000150  00000000  00001a6d         6765
+    0x00000154  00000000  00002ac2        10946
+    0x00000158  00000000  0000452f        17711
+    0x0000015c  00000000  00006ff1        28657
+    0x00000160  00000000  0000b520        46368
+    0x00000164  00000000  00012511        75025
+    0x00000168  00000000  0001da31       121393
+    0x0000016c  00000000  0002ff42       196418
+    0x00000170  00000000  0004d973       317811
+    0x00000174  00000000  0007d8b5       514229
+    0x00000178  00000000  000cb228       832040
+    0x0000017c  00000000  00148add      1346269
+    0x00000180  00000000  00213d05      2178309
+    0x00000184  00000000  0035c7e2      3524578
+    0x00000188  00000000  005704e7      5702887
+    0x0000018c  00000000  008cccc9      9227465
+    0x00000190  00000000  00e3d1b0     14930352
+    0x00000194  00000000  01709e79     24157817
+    0x00000198  00000000  02547029     39088169
+    0x0000019c  00000000  03c50ea2     63245986
+    0x000001a0  00000000  06197ecb    102334155
+    0x000001a4  00000000  09de8d6d    165580141
+    0x000001a8  00000000  0ff80c38    267914296
+    0x000001ac  00000000  19d699a5    433494437
+    0x000001b0  00000000  29cea5dd    701408733
+    0x000001b4  00000000  43a53f82   1134903170
+    0x000001b8  00000000  6d73e55f   1836311903

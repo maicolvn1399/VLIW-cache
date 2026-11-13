@@ -78,6 +78,7 @@ SUB_l1_dcache := $(CPU)/eviction_buffer.sv
 # La cache L2 de la Iteracion 4 no instancia otros submódulos internamente; 
 # toda su integración con el eviction buffer ocurre estructuralmente en top.sv.
 SUB_l2_cache := 
+SUB_l2_arbiter := 
 
 # ---- Dependencias extra por unidad (agregar aqui) ---------------------------
 DEPS_crypto_unit  := $(TB)/key_vault_model.sv
@@ -114,13 +115,16 @@ DEPS_programa     := $(wildcard $(CPU)/*.sv)
 DEPS_credencial   := $(wildcard $(CPU)/*.sv) \
                      $(PROGS)/cifrar_archivo.hex \
                      $(PROGS)/archivo_prueba.hex
-# tb_ejemplos monta tres procesadores, uno por programa de demostracion, y
-# compara lo que dejan contra los valores de sus cabeceras
+# tb_ejemplos monta cinco procesadores, uno por programa de demostracion, y
+# compara lo que dejan contra los valores de sus cabeceras. El quinto,
+# recorrido_cache, es el unico cuyo oraculo incluye los CONTADORES de la cache
+# y no solo los datos: su numero de aciertos y fallos sale de aritmetica.
 DEPS_ejemplos     := $(wildcard $(CPU)/*.sv) \
                      $(PROGS)/fibonacci.hex \
                      $(PROGS)/estadisticas.hex \
                      $(PROGS)/sesion_sin_logout.hex \
-                     $(PROGS)/contar_hasta_n.hex
+                     $(PROGS)/contar_hasta_n.hex \
+                     $(PROGS)/recorrido_cache.hex
 # tb_logout responde a una pregunta concreta -- si la boveda queda abierta
 # cuando el programa no hace LOGOUT -- y por eso tiene nombre propio en vez de
 # vivir dentro de tb_ejemplos: una propiedad de seguridad que no se puede
@@ -200,7 +204,7 @@ $(UNITS): %: tb_%.vvp
 .SECONDARY:
 .SECONDEXPANSION:
 tb_%.vvp: $$(PKGS) $$(if $$(filter $$*,$$(NO_RTL)),,$(CPU)/%.sv) $$(SUB_$$*) $$(DEPS_$$*) $(TB)/tb_%.sv
-	$(IVERILOG) $(FLAGS) $(XFLAGS_$*) -s tb_$* -o $@ $(filter %.sv,$^)
+	$(IVERILOG) $(FLAGS) $(XFLAGS_$*) $(XFLAGS_EXTRA) -s tb_$* -o $@ $(filter %.sv,$^)
 
 # ---- Ensamblado de programas -------------------------------------------------
 # Un .s produce los dos .hex de una pasada.
@@ -222,6 +226,9 @@ PALABRAS_estadisticas := 16384
 PALABRAS_suma_simple_emp := 16384
 PALABRAS_suma_vliw_emp   := 16384
 PALABRAS_contar_hasta_n  := 16384
+# recorrido_cache.s recorre un arreglo de 4 KB en 0x2000: necesita la dmem
+# completa de tb_ejemplos, no las 64 palabras por omision
+PALABRAS_recorrido_cache := 16384
 # tb_sum instancia memorias chicas: 64 bundles y 16 palabras
 BUNDLES_suma_10_15  := 64
 PALABRAS_suma_10_15 := 16
@@ -505,7 +512,7 @@ etapas: reg_if_id reg_id_ex reg_ex_mem pipeline latency fetch fetch_flow wconf t
 # Corre los testbenches de la jerarquía de memoria (L1-D, L2 y memoria principal).
 # Ideal para probar tu avance de la Iteración 4 con un solo comando.
 .PHONY: jerarquia
-jerarquia: mem_system l1_dcache l2_cache
+jerarquia: mem_system l1_dcache l2_cache l2_arbiter eviction_buffer
 	@echo ""
 	@echo "=============================================================="
 	@echo " Sistema de memoria completo verificado (L1-D, L2, Principal) "
@@ -546,7 +553,7 @@ empacar:
 # memoria de datos (make cifrar los corre con ella).
 PROGS_METRICAS := fibonacci estadisticas contar_hasta_n div32_prueba feistel \
                   lazo_estres sesion_sin_logout suma_10_15 \
-                  suma_simple_emp suma_vliw_emp
+                  suma_simple_emp suma_vliw_emp recorrido_cache
 
 .PHONY: metricas
 metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp

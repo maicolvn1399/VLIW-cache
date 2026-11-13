@@ -103,6 +103,9 @@ module tb_programa;
   logic [31:0]              hw_loads, hw_stores;
   logic [31:0]              hw_vacios, hw_saltos, hw_delay, hw_stall;
   logic [31:0]              hw_l1_ldh, hw_l1_ldm, hw_l1_sth, hw_l1_stm;
+  // Contadores de la cache L2 (Iteracion 4)
+  logic [31:0]              hw_l2_ldh, hw_l2_ldm, hw_l2_sth, hw_l2_stm;
+  logic [31:0]              hw_st_evict;
   logic [31:0]              hw_st_miss, hw_st_wb, hw_st_raw;
   logic                     hw_drenada;
   logic                     hw_desbordado;
@@ -135,6 +138,11 @@ module tb_programa;
       .perf_stall_miss     (hw_st_miss),
       .perf_stall_wb       (hw_st_wb),
       .perf_stall_raw      (hw_st_raw),
+      .perf_l2_load_hit    (hw_l2_ldh),
+      .perf_l2_load_miss   (hw_l2_ldm),
+      .perf_l2_store_hit   (hw_l2_sth),
+      .perf_l2_store_miss  (hw_l2_stm),
+      .perf_stall_evict    (hw_st_evict),
       .mem_drenada         (hw_drenada),
       .perf_desbordado     (hw_desbordado)
   );
@@ -657,6 +665,7 @@ module tb_programa;
 
   task automatic imprimir_cache(input integer salida);
     integer accesos, fallos, aciertos;
+    integer accesos_l2, aciertos_l2;
     real tasa_fallos, penalidad_medida, amat;
     integer total_stall;
     begin
@@ -676,7 +685,14 @@ module tb_programa;
       total_stall = hw_st_miss + hw_st_wb + hw_st_raw;
 
       $fdisplay(salida, "");
-      $fdisplay(salida, "  cache L1-D (4 KB, 2 vias, write-through, no-write-allocate, LRU)");
+      // La geometria se imprime desde las macros, no como texto fijo: el
+      // barrido de configuraciones recompila con otra geometria por -D, y un
+      // encabezado fijo haria que todos los archivos dijeran 4 KB.
+      $fdisplay(salida,
+          "  cache L1-D (%0d B, %0d vias, %0d conjuntos, lineas de %0d B,",
+          `L1D_BYTES, `L1D_WAYS, `L1D_SETS, `LINE_BYTES);
+      $fdisplay(salida,
+          "              write-through, no-write-allocate, LRU)");
       $fdisplay(salida, "    accesos totales              %10d", accesos);
       $fdisplay(salida, "      lecturas: aciertos         %10d", hw_l1_ldh);
       $fdisplay(salida, "      lecturas: fallos           %10d", hw_l1_ldm);
@@ -695,7 +711,29 @@ module tb_programa;
       $fdisplay(salida, "      fallo de lectura           %10d", hw_st_miss);
       $fdisplay(salida, "      write buffer lleno         %10d", hw_st_wb);
       $fdisplay(salida, "      conflicto RAW              %10d", hw_st_raw);
+      $fdisplay(salida, "      eviction buffer lleno      %10d", hw_st_evict);
       $fdisplay(salida, "      total                      %10d", total_stall);
+
+      // ---- Cache L2 (Iteracion 4) -----------------------------------------
+      // Los fallos de L1 ya no cuestan T_mem siempre: los que aciertan en L2
+      // cuestan L2_HIT_CYCLES. La tasa de aciertos de L2 es la que dice que
+      // parte de la penalidad se evito, y es lo que hace falta para el AMAT
+      // de la jerarquia completa.
+      accesos_l2  = hw_l2_ldh + hw_l2_ldm + hw_l2_sth + hw_l2_stm;
+      aciertos_l2 = hw_l2_ldh + hw_l2_sth;
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  cache L2 unificada (%0d KB, %0d vias, %0d conjuntos, write-back,",
+                (`L2_SETS * `L2_WAYS * `LINE_BYTES) / 1024, `L2_WAYS, `L2_SETS);
+      $fdisplay(salida, "                      write-allocate, LRU exacto, hit time %0d)",
+                `L2_HIT_CYCLES);
+      $fdisplay(salida, "    accesos totales              %10d", accesos_l2);
+      $fdisplay(salida, "      lecturas: aciertos         %10d", hw_l2_ldh);
+      $fdisplay(salida, "      lecturas: fallos           %10d", hw_l2_ldm);
+      $fdisplay(salida, "      escrituras: aciertos       %10d", hw_l2_sth);
+      $fdisplay(salida, "      escrituras: fallos         %10d", hw_l2_stm);
+      $fdisplay(salida, "    tasa de aciertos             %9.2f%%",
+                (accesos_l2 == 0) ? 0.0 : 100.0 * aciertos_l2 / accesos_l2);
 
       // El desglose tiene que sumar el contador global de stalls. Si no suma,
       // alguna causa se esta contando dos veces o falta una.

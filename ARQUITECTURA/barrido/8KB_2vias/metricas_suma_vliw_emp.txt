@@ -1,0 +1,84 @@
+=== resultado de suma_vliw_emp.s ===
+
+  el programa llego a HALT en 757 ciclos, 253 bundles ejecutados
+
+  metricas de rendimiento (contadores de hardware)
+    ciclos de ejecucion                 757
+    bundles ejecutados                  253
+    instrucciones ejecutadas            267
+    IPC  (instrucciones/ciclo)        0.353
+    bundles por ciclo                 0.334
+    ocupacion del bundle               1.06  de 5 ranuras
+    bundles vacios (puros NOP)           55
+    saltos tomados                       15
+    delay slots desperdiciados           15
+    ciclos perdidos por stalls          504
+
+  cache L1-D (8192 B, 2 vias, 128 conjuntos, lineas de 32 B,
+              write-through, no-write-allocate, LRU)
+    accesos totales                      65
+      lecturas: aciertos                 56
+      lecturas: fallos                    8
+      escrituras: aciertos                0
+      escrituras: fallos                  1
+    tasa de aciertos                 86.15%
+    tasa de fallos                   13.85%
+    penalidad medida por fallo         63.0 ciclos  (T_mem = 53)
+    AMAT                               9.72 ciclos
+
+    ciclos perdidos, por causa
+      fallo de lectura                  504
+      write buffer lleno                  0
+      conflicto RAW                       0
+      eviction buffer lleno               0
+      total                             504
+
+  cache L2 unificada (16 KB, 4 vias, 128 conjuntos, write-back,
+                      write-allocate, LRU exacto, hit time 8)
+    accesos totales                       9
+      lecturas: aciertos                  0
+      lecturas: fallos                    8
+      escrituras: aciertos                0
+      escrituras: fallos                  1
+    tasa de aciertos                  0.00%
+    ok     suma de causas = stalls 504
+    ok     accesos L1 = loads + stores 65
+
+    ocupacion por ranura
+      S0 ALU-0        149
+      S1 ALU-1         36
+      S2 LSU           65   (64 loads, 1 stores)
+      S3 cripto         0
+      S4 BRU           17
+
+  los contadores contra la cuenta del testbench
+    ok     ciclos                 757
+    ok     bundles                253
+    ok     instrucciones          267
+    ok     ranura S0              149
+    ok     ranura S1              36
+    ok     ranura S2              65
+    ok     ranura S3              0
+    ok     ranura S4              17
+    ok     loads                  64
+    ok     stores                 1
+    ok     loads + stores = S2    65
+
+  registros
+    r0  = 00000000            0        r1  = 00000e89         3721
+    r2  = 00000f04         3844        r3  = 00000000            0
+    r4  = 00000200          512        r5  = 00000f81         3969
+    r6  = 00015d60        89440        r7  = 00005540        21824
+    r8  = 0000b6d0        46800        r9  = 00005d80        23936
+    r10 = 00000000            0        r11 = 00000000            0
+    r12 = 00000000            0        r13 = 00001000         4096
+    r14 = 00000000            0        r15 = 00000000            0
+
+  PSW = 00000001
+    banderas  Z=1 N=0 C=0 V=0
+    boveda    AUTH=0 AUTHFAIL=0
+    fallas    EXC=0 CAUSE=ninguna
+
+  memoria escrita por el programa: 1 palabras, de 0x00000200 a 0x00000200
+    direccion   antes     ahora     ahora (decimal)
+    0x00000200  00000000  00015d60        89440

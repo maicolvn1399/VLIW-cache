@@ -43,6 +43,21 @@ module l2_cache #(
     output logic                     l2_inv_req,
     output logic [`MEM_LIDX_W-1:0]   l2_inv_linea,
 
+    // ---- Vaciado (flush) ----------------------------------------------------
+    // Con write-back, una linea sucia solo sale de la L2 cuando alguien pide su
+    // conjunto. Si el programa termina antes, el dato se queda adentro y nunca
+    // llega a memoria principal. Por eso hace falta un vaciado explicito: es la
+    // operacion de flush que cualquier jerarquia con un nivel write-back
+    // necesita, no un parche para las pruebas.
+    //
+    //   vaciar       lo levanta top.sv cuando el pipeline ya se detuvo y no
+    //                queda nada en vuelo aguas arriba
+    //   tiene_sucias es la condicion de parada: mientras este en alto, quedan
+    //                datos que no estan en memoria, y mem_drenada no puede
+    //                levantarse
+    input  logic                     vaciar,
+    output logic                     tiene_sucias,
+
     // ---- Interfaz hacia abajo (Memoria Principal para lecturas/rellenos) ----
     output logic                     mem_req,
     output logic [`MEM_LIDX_W-1:0]   mem_linea,
@@ -107,8 +122,12 @@ module l2_cache #(
   // Codificador de prioridad inverso (identifica el índice de la vía que acertó)
   always_comb begin
       via_acertada = '0;
+      // Se usa una conversion de ancho, WAY_W'(v), y no un recorte de bits,
+      // v[WAY_W-1:0]: el recorte dentro de un always_* Icarus no lo soporta
+      // ("sorry: constant selects in always_* processes") y se lleva todos los
+      // bits. La conversion dice lo mismo y si la acepta.
       for (int v = 0; v < WAYS; v++) begin
-          if (acierto_via[v]) via_acertada = v[WAY_W-1:0];
+          if (acierto_via[v]) via_acertada = WAY_W'(v);
       end
   end
 
@@ -123,8 +142,8 @@ module l2_cache #(
   always_comb begin
       via_victima = '0;
       for (int v = 0; v < WAYS; v++) begin
-          if (edades[v][conjunto] == (WAYS - 1)) begin
-              via_victima = v[WAY_W-1:0];
+          if (edades[v][conjunto] == WAY_W'(WAYS - 1)) begin
+              via_victima = WAY_W'(v);
           end
       end
   end
@@ -157,11 +176,40 @@ module l2_cache #(
       EVALUAR,   // Decide si es hit, miss sucio o miss limpio
       EVICT,     // Expulsión de la víctima sucia hacia el Eviction Buffer
       ALLOCATE,  // Traer nueva línea desde memoria (si aplica)
-      ACTUALIZAR // Insertar línea en caché y levantar 'listo'
+      ACTUALIZAR,// Insertar línea en caché y levantar 'listo'
+      VACIANDO   // Recorre toda la cache empujando lo que quedo sucio
   } estado_l2_t;
 
   estado_l2_t estado, proximo_estado;
-  logic [2:0] contador_latencia;
+
+  // El contador se dimensiona desde la macro en vez de fijarlo en 3 bits: asi
+  // cambiar L2_HIT_CYCLES en cerbero_defs.svh de verdad cambia la latencia, que
+  // es la convencion del resto del proyecto (T_mem se comprueba igual).
+  localparam int LAT_W = (`L2_HIT_CYCLES <= 1) ? 1 : $clog2(`L2_HIT_CYCLES);
+  logic [LAT_W-1:0] contador_latencia;
+
+  // ---- Recorrido del vaciado -----------------------------------------------
+  // Un solo contador recorre los pares (via, conjunto). El bit de mas arriba
+  // avisa que ya se dio la vuelta completa.
+  localparam int VAC_W = SET_W + WAY_W;
+  logic [VAC_W:0]    vac_idx;
+  logic [SET_W-1:0]  vac_conjunto;
+  logic [WAY_W-1:0]  vac_via;
+  logic              vac_fin, vac_sucia;
+
+  assign vac_conjunto = vac_idx[SET_W-1:0];
+  assign vac_via      = vac_idx[SET_W +: WAY_W];
+  assign vac_fin      = vac_idx[VAC_W];
+  assign vac_sucia    = !vac_fin && valido[vac_via][vac_conjunto]
+                                 && sucio [vac_via][vac_conjunto];
+
+  // Condicion de parada para mem_drenada: queda algo sin escribir en memoria.
+  always_comb begin
+      tiene_sucias = 1'b0;
+      for (int v = 0; v < WAYS; v++)
+          for (int s = 0; s < SETS; s++)
+              if (valido[v][s] && sucio[v][s]) tiene_sucias = 1'b1;
+  end
 
   always_ff @(posedge clk) begin
       if (!rst_n) estado <= ESPERA;
@@ -172,7 +220,17 @@ module l2_cache #(
       proximo_estado = estado;
       case (estado)
           ESPERA: begin
+              // Una peticion real siempre gana sobre el vaciado: el vaciado
+              // solo corre cuando ya no hay nadie pidiendo nada.
+              if (req_lectura || req_escritura)      proximo_estado = LATENCIA;
+              else if (vaciar && tiene_sucias)       proximo_estado = VACIANDO;
+          end
+
+          VACIANDO: begin
+              // Se recorre toda la cache una vez. Se sale al terminar la
+              // vuelta, o antes si aparece una peticion de verdad.
               if (req_lectura || req_escritura) proximo_estado = LATENCIA;
+              else if (vac_fin)                 proximo_estado = ESPERA;
           end
           
           LATENCIA: begin
@@ -218,17 +276,44 @@ module l2_cache #(
   // ===========================================================================
 
   // Hacia la memoria principal (lectura)
-  assign mem_req   = (estado == ALLOCATE) && !(req_escritura && mascara_completa_32B);
+  // El !mem_listo del final es el CONTRATO con mem_controller.sv, escrito en
+  // su cabecera desde la Iteracion 2: req tiene que bajar durante el ciclo en
+  // que el cliente ve listo encendido.
+  //
+  // El motivo es que listo y el regreso a LIBRE del controlador ocurren en el
+  // mismo flanco, asi que durante el ciclo de listo la maquina ya esta libre y
+  // vuelve a mirar req. Sin este termino, el controlador lee el pedido viejo
+  // como uno nuevo y arranca una segunda lectura de 53 ciclos; cuando esa
+  // lectura fantasma termina, entrega SUS datos al relleno que este en curso
+  // en ese momento, que ya es el de otra linea. El sintoma era una linea
+  // llenada con el contenido de la anterior.
+  //
+  // La L1 cumple el mismo contrato con su '!mem_listo' en el estado LLENA.
+  assign mem_req   = (estado == ALLOCATE)
+                  && !(req_escritura && mascara_completa_32B)
+                  && !mem_listo;
   assign mem_linea = req_linea;
 
-  // Hacia el eviction buffer (desalojo)
-  assign ev_push    = (estado == EVICT) && !ev_lleno;
-  assign ev_linea   = {etiqueta[via_victima][conjunto], conjunto};
-  assign ev_datos   = datos[via_victima][conjunto];
+  // Hacia el eviction buffer (desalojo). Hay dos fuentes: el desalojo normal
+  // por reemplazo (EVICT) y el vaciado de fin de programa (VACIANDO), que
+  // recorre la cache con sus propios indices.
+  assign ev_push    = ((estado == EVICT)    && !ev_lleno)
+                   || ((estado == VACIANDO) && vac_sucia && !ev_lleno);
+
+  assign ev_linea   = (estado == VACIANDO)
+                        ? {etiqueta[vac_via][vac_conjunto], vac_conjunto}
+                        : {etiqueta[via_victima][conjunto], conjunto};
+
+  assign ev_datos   = (estado == VACIANDO)
+                        ? datos[vac_via][vac_conjunto]
+                        : datos[via_victima][conjunto];
+
   assign ev_mascara = {`LINE_MASK_W{1'b1}}; // L2 siempre expulsa líneas enteras
 
   // El L2 se detiene si necesita expulsar una línea pero el Eviction Buffer
   // de la memoria principal está lleno. Esto genera el contador 22.
+  // El vaciado no cuenta aqui: ocurre con el procesador ya detenido, asi que
+  // no le hace perder ciclos a nadie y sumarlo falsearia la metrica.
   assign ev_stall_evict = (estado == EVICT) && ev_lleno;
 
   // Hacia arriba (L1 - Invalidación Hacia Atrás)
@@ -259,6 +344,7 @@ module l2_cache #(
   always_ff @(posedge clk) begin
       if (!rst_n) begin
           contador_latencia <= '0;
+          vac_idx           <= '0;
           for (v = 0; v < WAYS; v++) begin
               for (s = 0; s < SETS; s++) begin
                   valido[v][s] <= 1'b0;
@@ -270,12 +356,45 @@ module l2_cache #(
           case (estado)
               ESPERA: begin
                   if (req_lectura || req_escritura) begin
-                      contador_latencia <= 3'd7; // 8 ciclos de penalización de hit
+                      // El contador arranca en L2_HIT_CYCLES-3 para que el
+                      // acierto cueste EXACTAMENTE lo que dice la macro,
+                      // medido de la peticion a listo. Son tres los ciclos que
+                      // no pasa contando: el de ESPERA en que acepta la
+                      // peticion, el de EVALUAR en que resuelve y levanta
+                      // listo, y el ultimo de LATENCIA, en que el contador ya
+                      // vale cero y la maquina esta saliendo.
+                      //
+                      // Es el mismo ajuste que mem_controller.sv hace con
+                      // 'faltan <= MEM_FIRST_WORD - 2' para que T_mem de 53 y
+                      // no 54. Un tiempo que no coincide con su macro no se
+                      // puede contrastar, y contrastarlo es justamente lo que
+                      // hace tb_l2_cache.sv.
+                      contador_latencia <= LAT_W'(`L2_HIT_CYCLES - 3);
                   end
+                  // Cada vaciado empieza su recorrido desde el principio
+                  vac_idx <= '0;
               end
-              
+
               LATENCIA: begin
                   contador_latencia <= contador_latencia - 1'b1;
+              end
+
+              VACIANDO: begin
+                  // Se avanza cuando la entrada no esta sucia (no hay nada que
+                  // escribir) o cuando si lo esta y el eviction buffer la
+                  // acepto. Si el buffer esta lleno, se espera sin avanzar.
+                  if (!vac_fin) begin
+                      if (!vac_sucia) begin
+                          vac_idx <= vac_idx + 1'b1;
+                      end
+                      else if (!ev_lleno) begin
+                          // Ya quedo entregada al buffer: dejarla limpia para
+                          // que tiene_sucias pueda bajar y no se escriba dos
+                          // veces si alguien vuelve a pedir un vaciado.
+                          sucio[vac_via][vac_conjunto] <= 1'b0;
+                          vac_idx <= vac_idx + 1'b1;
+                      end
+                  end
               end
               
               EVALUAR: begin

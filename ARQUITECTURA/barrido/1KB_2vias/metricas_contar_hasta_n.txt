@@ -1,0 +1,94 @@
+=== resultado de contar_hasta_n.s ===
+
+  el programa llego a HALT en 99 ciclos, 99 bundles ejecutados
+
+  metricas de rendimiento (contadores de hardware)
+    ciclos de ejecucion                  99
+    bundles ejecutados                   99
+    instrucciones ejecutadas             76
+    IPC  (instrucciones/ciclo)        0.768
+    bundles por ciclo                 1.000
+    ocupacion del bundle               0.77  de 5 ranuras
+    bundles vacios (puros NOP)           55
+    saltos tomados                        9
+    delay slots desperdiciados            9
+    ciclos perdidos por stalls            0
+
+  cache L1-D (1024 B, 2 vias, 16 conjuntos, lineas de 32 B,
+              write-through, no-write-allocate, LRU)
+    accesos totales                      11
+      lecturas: aciertos                  0
+      lecturas: fallos                    0
+      escrituras: aciertos                0
+      escrituras: fallos                 11
+    tasa de aciertos                  0.00%
+    tasa de fallos                  100.00%
+    penalidad medida por fallo          0.0 ciclos  (T_mem = 53)
+    AMAT                               1.00 ciclos
+
+    ciclos perdidos, por causa
+      fallo de lectura                    0
+      write buffer lleno                  0
+      conflicto RAW                       0
+      eviction buffer lleno               0
+      total                               0
+
+  cache L2 unificada (16 KB, 4 vias, 128 conjuntos, write-back,
+                      write-allocate, LRU exacto, hit time 8)
+    accesos totales                       5
+      lecturas: aciertos                  0
+      lecturas: fallos                    0
+      escrituras: aciertos                2
+      escrituras: fallos                  3
+    tasa de aciertos                 40.00%
+    ok     suma de causas = stalls 0
+    ok     accesos L1 = loads + stores 11
+
+    ocupacion por ranura
+      S0 ALU-0         32
+      S1 ALU-1         12
+      S2 LSU           11   (0 loads, 11 stores)
+      S3 cripto        10
+      S4 BRU           11
+
+  los contadores contra la cuenta del testbench
+    ok     ciclos                 99
+    ok     bundles                99
+    ok     instrucciones          76
+    ok     ranura S0              32
+    ok     ranura S1              12
+    ok     ranura S2              11
+    ok     ranura S3              10
+    ok     ranura S4              11
+    ok     loads                  0
+    ok     stores                 11
+    ok     loads + stores = S2    11
+
+  registros
+    r0  = 00000000            0        r1  = 0000000b           11
+    r2  = 00000000            0        r3  = 00000428         1064
+    r4  = 00000000            0        r5  = 00000000            0
+    r6  = 00000037           55        r7  = 00000000            0
+    r8  = 00000000            0        r9  = 00000000            0
+    r10 = 00000000            0        r11 = 00000000            0
+    r12 = 00000000            0        r13 = 00000000            0
+    r14 = 00000000            0        r15 = 00000000            0
+
+  PSW = 00000001
+    banderas  Z=1 N=0 C=0 V=0
+    boveda    AUTH=0 AUTHFAIL=0
+    fallas    EXC=0 CAUSE=ninguna
+
+  memoria escrita por el programa: 11 palabras, de 0x00000400 a 0x00000440
+    direccion   antes     ahora     ahora (decimal)
+    0x00000400  00000000  00000001            1
+    0x00000404  00000000  00000002            2
+    0x00000408  00000000  00000003            3
+    0x0000040c  00000000  00000004            4
+    0x00000410  00000000  00000005            5
+    0x00000414  00000000  00000006            6
+    0x00000418  00000000  00000007            7
+    0x0000041c  00000000  00000008            8
+    0x00000420  00000000  00000009            9
+    0x00000424  00000000  0000000a           10
+    0x00000440  00000000  00000037           55

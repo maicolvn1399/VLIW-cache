@@ -81,6 +81,14 @@ module tb_l1_dcache;
   logic                    mem_listo;
   logic [`LINE_W-1:0]      mem_datos;
 
+  // ---- Invalidacion hacia atras desde L2 ---------------------------------------
+  // La politica es inclusiva: cuando L2 expulsa una linea valida avisa a L1
+  // para que la descarte. Estos puertos existen desde la Iteracion 4 y antes
+  // quedaban flotando aqui, asi que todos los casos de abajo corrian con x en
+  // la entrada y la invalidacion no la probaba nadie.
+  logic                    inv_req;
+  logic [`MEM_LIDX_W-1:0]  inv_linea;
+
   // ---- Contadores ---------------------------------------------------------------
   logic ev_load_hit, ev_load_miss, ev_store_hit, ev_store_miss;
   logic ev_stall_miss, ev_stall_wb, ev_stall_raw;
@@ -88,6 +96,8 @@ module tb_l1_dcache;
   l1_dcache dut (
       .clk           (clk),
       .rst_n         (rst_n),
+      .inv_req       (inv_req),
+      .inv_linea     (inv_linea),
       .req           (req),
       .addr          (addr),
       .we            (we),
@@ -419,6 +429,9 @@ module tb_l1_dcache;
     $display("    linea           %0d bytes", `LINE_BYTES);
     $display("    mismo conjunto cada %0d bytes", PASO_CONJUNTO);
 
+    inv_req   = 1'b0;
+    inv_linea = '0;
+
     sembrar();
     reiniciar();
 
@@ -669,6 +682,57 @@ module tb_l1_dcache;
 
     leer(32'h0000_7000);
     check("y el acierto siguiente sigue costando uno",
+          ciclos_del_acceso, `L1_HIT_CYCLES);
+
+    // -------------------------------------------------------------------------
+    $display("");
+    $display("[INV] invalidacion hacia atras desde la L2");
+    // -------------------------------------------------------------------------
+    // La politica es inclusiva, asi que cuando la L2 expulsa una linea valida
+    // avisa a la L1 para que la descarte. Si la L1 no la descartara, se
+    // quedaria sirviendo una copia de algo que el nivel de abajo ya no tiene.
+    //
+    // OJO con el ancho: la L2 manda el numero de linea en el espacio de
+    // memoria principal (MEM_LIDX_W bits), no la direccion. Reconstruir la
+    // etiqueta de L1 desde ahi es lo que estaba roto hasta la Iteracion 4:
+    // se leian bits fuera de rango y la comparacion no daba verdadero nunca.
+
+    // Se trae una linea y se comprueba que de verdad quedo en la cache
+    leer(32'h0000_1000);
+    check("la linea esta en la cache tras el fallo",
+          ciclos_del_acceso, `T_MEM + 1);
+    leer(32'h0000_1000);
+    check("y el acceso siguiente es un acierto de un ciclo",
+          ciclos_del_acceso, `L1_HIT_CYCLES);
+
+    // La L2 avisa que expulso esa misma linea
+    @(negedge clk);
+    inv_req   = 1'b1;
+    inv_linea = 32'h0000_1000 >> `LINE_OFF_W;
+    @(posedge clk);
+    @(negedge clk);
+    inv_req   = 1'b0;
+    #1;
+
+    // Ahora el mismo acceso tiene que volver a fallar
+    leer(32'h0000_1000);
+    check("tras la invalidacion la linea ya no esta",
+          ciclos_del_acceso, `T_MEM + 1);
+    check_hex("y la volvio a traer correcta", dato_leido,
+              32'hDA7A_0000 + 32'h1000/4);
+
+    // Y una invalidacion de OTRA linea no puede tocar esta
+    leer(32'h0000_1000);                       // queda caliente otra vez
+    @(negedge clk);
+    inv_req   = 1'b1;
+    inv_linea = 32'h0000_2000 >> `LINE_OFF_W;  // una linea distinta
+    @(posedge clk);
+    @(negedge clk);
+    inv_req   = 1'b0;
+    #1;
+
+    leer(32'h0000_1000);
+    check("invalidar otra linea no afecta a esta",
           ciclos_del_acceso, `L1_HIT_CYCLES);
 
 `ifdef FORCE_FAIL

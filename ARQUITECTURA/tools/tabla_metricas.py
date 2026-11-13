@@ -78,6 +78,22 @@ def leer(ruta):
     # Un desbordamiento invalida todo lo demas, asi que se marca aparte
     datos["desbordado"] = "algun contador se desbordo" in texto
 
+    # La geometria de la cache se lee del archivo, no se da por supuesta: el
+    # barrido de configuraciones produce archivos con geometrias distintas y
+    # una etiqueta escrita a mano los haria decir todos lo mismo.
+    geom = re.search(r"cache L1-D \((\d+) B, (\d+) vias, (\d+) conjuntos,"
+                     r" lineas de (\d+) B,", texto)
+    if geom:
+        datos["geometria"] = (
+            f"{int(geom.group(1)) // 1024} KB, {geom.group(2)} vias, "
+            f"{geom.group(3)} conjuntos, lineas de {geom.group(4)} B"
+            if int(geom.group(1)) >= 1024 else
+            f"{geom.group(1)} B, {geom.group(2)} vias, "
+            f"{geom.group(3)} conjuntos, lineas de {geom.group(4)} B"
+        )
+    else:
+        datos["geometria"] = "geometria no reportada"
+
     return datos
 
 
@@ -93,7 +109,16 @@ def tabla_cache(filas, ancho):
     con T_mem supuesto. Que los dos se parezcan es una comprobacion; que no se
     parezcan es un hallazgo.
     """
-    print("  cache L1-D: 4 KB, 2 vias, write-through, no-write-allocate, LRU")
+    geoms = sorted({f.get("geometria", "?") for f in filas})
+    if len(geoms) == 1:
+        print(f"  cache L1-D: {geoms[0]},")
+        print("              write-through, no-write-allocate, LRU")
+    else:
+        # Mezclar geometrias en una sola tabla hace comparables numeros que no
+        # lo son, asi que se avisa en vez de callarlo.
+        print("  CUIDADO: estos archivos no son todos de la misma geometria")
+        for g in geoms:
+            print(f"    {g}")
     print()
     print(f"  {'programa':<{ancho}}  {'accesos':>8}  {'ld hit':>7}  {'ld mis':>7}  "
           f"{'st mis':>7}  {'aciertos':>9}  {'AMAT':>6}")

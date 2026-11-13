@@ -58,27 +58,37 @@ module tb_ejemplos;
   localparam int N_BUNDLES = 2048;
   localparam int N_WORDS   = 16384;
 
-  // Tope de ciclos. El mas largo de los tres son los 820 de estadisticas; 4000
-  // deja holgura de sobra y corta un cuelgue enseguida.
-  localparam int TOPE = 4000;
+  // Tope de ciclos. El mas largo es recorrido_cache.s, que con la geometria de
+  // serie termina en unos 17 800 ciclos porque paga 128 fallos de arranque mas
+  // los 642 accesos; 25 000 deja holgura y corta un cuelgue enseguida. Los
+  // otros cuatro caben de sobra (el siguiente son los 820 de estadisticas).
+  localparam int TOPE = 25000;
 
   // Donde cada programa deja sus resultados
   localparam int W_FIB = 32'h0100 / 4;         // 64,  47 palabras
   localparam int W_EST = 32'h0040 / 4;         // 16,   6 palabras
   localparam int W_SES = 32'h0300 / 4;         // 192,  3 palabras
   localparam int W_CNT = 32'h0400 / 4;         // 256, 10 palabras
+  localparam int W_REC = 32'h0100 / 4;         // 64,   2 palabras
+  localparam int W_ARR = 32'h2000 / 4;         // 2048, el arreglo recorrido
 
   localparam int N_FIB = 47;
+
+  // recorrido_cache.s: 128 lineas de 32 B recorridas 4 veces. Los contadores
+  // de cache tienen que dar exactamente estos numeros, que no son una medicion
+  // sino aritmetica (ver la cabecera del programa).
+  localparam int N_LINEAS = 128;
+  localparam int N_PASADAS = 4;
 
   // ---------------------------------------------------------------------------
   // Tres procesadores identicos, un programa cada uno
   // ---------------------------------------------------------------------------
 
-  logic             halt_f, halt_e, halt_s, halt_c;
-  logic [`XLEN-1:0] psw_f,  psw_e,  psw_s,  psw_c;
+  logic             halt_f, halt_e, halt_s, halt_c, halt_r;
+  logic [`XLEN-1:0] psw_f,  psw_e,  psw_s,  psw_c,  psw_r;
 
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [`NREGS-1:0][`XLEN-1:0] regs_f, regs_e, regs_s, regs_c;
+  logic [`NREGS-1:0][`XLEN-1:0] regs_f, regs_e, regs_s, regs_c, regs_r;
   /* verilator lint_on UNUSEDSIGNAL */
 
   top #(
@@ -115,6 +125,15 @@ module tb_ejemplos;
   ) cnt (
       .clk (clk), .rst_n (rst_n),
       .halted (halt_c), .psw (psw_c), .dbg_regs (regs_c)
+  );
+
+  top #(
+      .NUM_BUNDLES (N_BUNDLES),
+      .NUM_WORDS   (N_WORDS),
+      .RESET_PC    (32'h0000_0000)
+  ) rec (
+      .clk (clk), .rst_n (rst_n),
+      .halted (halt_r), .psw (psw_r), .dbg_regs (regs_r)
   );
 
   // ---------------------------------------------------------------------------
@@ -209,6 +228,7 @@ module tb_ejemplos;
     $readmemh("../../tools/programas/estadisticas.hex", est.u_imem.storage);
     $readmemh("../../tools/programas/sesion_sin_logout.hex", ses.u_imem.storage);
     $readmemh("../../tools/programas/contar_hasta_n.hex", cnt.u_imem.storage);
+    $readmemh("../../tools/programas/recorrido_cache.hex", rec.u_imem.storage);
     // estadisticas.s es el unico de los tres con seccion .data: el arreglo de
     // ocho palabras que recorre.
     $readmemh("../../tools/programas/estadisticas_datos.hex", est.u_mem_sys.u_mem.storage);
@@ -220,7 +240,7 @@ module tb_ejemplos;
     #1 rst_n = 1'b1;
 
     c = 0;
-    while (!(halt_f && halt_e && halt_s && halt_c) && c < TOPE) begin
+    while (!(halt_f && halt_e && halt_s && halt_c && halt_r) && c < TOPE) begin
       @(posedge clk);
       c = c + 1;
     end
@@ -230,13 +250,14 @@ module tb_ejemplos;
     // a memoria principal, asi que revisarla apenas el programa se detiene
     // daria por perdidos stores que seguian en camino. Son ciclos del ARNES.
     guarda_drenado = 0;
-    while (!(fib.mem_drenada && est.mem_drenada && ses.mem_drenada && cnt.mem_drenada) && guarda_drenado < 200000) begin
+    while (!(fib.mem_drenada && est.mem_drenada && ses.mem_drenada && cnt.mem_drenada
+             && rec.mem_drenada) && guarda_drenado < 200000) begin
       @(posedge clk);
       guarda_drenado = guarda_drenado + 1;
     end
     #1;
 
-    $display("  (los tres corrieron en paralelo, %0d ciclos hasta el ultimo HALT)", c);
+    $display("  (los cinco corrieron en paralelo, %0d ciclos hasta el ultimo HALT)", c);
     $display("");
 
     // ------------------------------------------------------------------------
@@ -333,6 +354,80 @@ module tb_ejemplos;
     check32("la suma quedo en r6", regs_c[6], 32'd55);
     check32("y tambien en 0x440",
             cnt.u_mem_sys.u_mem.storage[32'h0440 / 4], 32'd55);
+
+    // ------------------------------------------------------------------------
+    $display("");
+    $display("[5] recorrido_cache.s: los contadores de cache contra la aritmetica");
+    // ------------------------------------------------------------------------
+    // Este es el unico caso donde el oraculo no son solo los datos sino los
+    // CONTADORES. El profesor pidio validar que las metricas son reales, y la
+    // unica forma de hacerlo es con un programa cuyo numero de aciertos y
+    // fallos se pueda calcular sin simular.
+    //
+    // El programa recorre 128 lineas en ciclo, 4 veces, sobre una cache que con
+    // la geometria de serie tiene capacidad para exactamente 128 lineas. Por
+    // eso:
+    //
+    //   fallos de lectura   = 128    solo los de arranque: la pasada 1 toca
+    //                                cada linea por primera vez
+    //   aciertos de lectura = 384    las pasadas 2, 3 y 4 completas,
+    //                                128 x 3, porque el conjunto cabe justo
+    //   fallos de escritura = 130    los 128 de la pasada de escritura mas los
+    //                                2 del guardado final. Con
+    //                                no-write-allocate NINGUN almacenamiento
+    //                                acierta, porque ninguno trae su linea
+    //   aciertos de escritura = 0    corolario del anterior
+    //
+    // Si la cache acertara de mas, el LRU estaria conservando lineas que
+    // debio expulsar; si acertara de menos, estaria expulsando lineas que
+    // caben. Las dos cosas se ven aqui y en ningun otro programa de la suite.
+
+    check_int("el programa llego a HALT", halt_r, 1'b1);
+    check_int("sin fallas en su PSW", psw_r[`PSW_EXC], 1'b0);
+
+    // Primero los datos, porque un contador correcto sobre un calculo
+    // equivocado no prueba nada
+    malos = 0;
+    for (i = 0; i < N_LINEAS; i = i + 1)
+      if (rec.u_mem_sys.u_mem.storage[W_ARR + i * 8] !== i) begin
+        malos = malos + 1;
+        if (malos <= 3)
+          $display("         linea %0d: %08h, esperado %08h", i,
+                   rec.u_mem_sys.u_mem.storage[W_ARR + i * 8], i);
+      end
+    check_int("escribio i en la primera palabra de las 128 lineas", malos, 0);
+
+    // 4 x (0 + 1 + ... + 127) = 4 x 8128 = 32512
+    check32("r4 = suma de las cuatro pasadas", regs_r[4],
+            N_PASADAS * (N_LINEAS * (N_LINEAS - 1)) / 2);
+    check32("r8 = 128, el ultimo valor escrito mas uno", regs_r[8], N_LINEAS);
+    check32("r2 = 0, no quedan pasadas",   regs_r[2], 32'd0);
+    check32("r1 volvio a la base 0x2000",  regs_r[1], 32'h0000_2000);
+    check32("la suma quedo en 0x100",
+            rec.u_mem_sys.u_mem.storage[W_REC + 0],
+            N_PASADAS * (N_LINEAS * (N_LINEAS - 1)) / 2);
+    check32("y el contador en 0x104",
+            rec.u_mem_sys.u_mem.storage[W_REC + 1], N_LINEAS);
+
+    // Y ahora los contadores, que es el punto del caso. Se comparan solo si la
+    // geometria compilada es la que hace valido el calculo: con otra
+    // capacidad los numeros de arriba son distintos y compararlos seria
+    // inventar una falla.
+    if ((`L1D_SETS * `L1D_WAYS) == N_LINEAS) begin
+      check_int("fallos de lectura = 128 (todos de arranque)",
+                rec.perf_l1_load_miss, N_LINEAS);
+      check_int("aciertos de lectura = 384 (las pasadas 2 a 4)",
+                rec.perf_l1_load_hit, N_LINEAS * (N_PASADAS - 1));
+      check_int("aciertos de escritura = 0 (no-write-allocate)",
+                rec.perf_l1_store_hit, 0);
+      check_int("fallos de escritura = 130 (128 del arreglo + 2 del final)",
+                rec.perf_l1_store_miss, N_LINEAS + 2);
+    end
+    else begin
+      $display("    nota   geometria de %0d lineas, no 128: no se comparan",
+               `L1D_SETS * `L1D_WAYS);
+      $display("           los contadores, porque el calculo a mano no aplica");
+    end
 
 `ifdef FORCE_FAIL
     // ------------------------------------------------------------------------

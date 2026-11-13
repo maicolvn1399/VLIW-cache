@@ -186,8 +186,24 @@ module l1_dcache (
   logic [`L1D_TAG_W-1:0]  inv_tag;
   logic [`L1D_SIDX_W-1:0] inv_conjunto;
 
-  // Como L2 entrega el número de línea completo, se reconstruye el TAG y CONJUNTO local
-  assign inv_tag      = inv_linea[`L1D_TAG_W + `L1D_SIDX_W - 1 : `L1D_SIDX_W];
+  // Como L2 entrega el numero de linea completo, se reconstruye el TAG y el
+  // CONJUNTO locales.
+  //
+  // OJO con los anchos, que aqui no cuadran solos. Un numero de linea en el
+  // espacio de memoria principal tiene MEM_LIDX_W bits (11: son 64 KB / 32 B =
+  // 2048 lineas), mientras que la etiqueta de L1 se define sobre la direccion
+  // completa y ocupa L1D_TAG_W bits (21). Seleccionar 21 bits de un vector de
+  // 11 lee fuera de rango y devuelve x, con lo cual la comparacion de etiqueta
+  // no da verdadero NUNCA y la invalidacion no invalida nada.
+  //
+  // La informacion real son los MEM_LIDX_W - L1D_SIDX_W bits altos del numero
+  // de linea (5); el resto de la etiqueta es cero porque la memoria es de
+  // 64 KB y las direcciones validas no llegan mas arriba. Entonces se extiende
+  // con ceros en vez de seleccionar fuera de rango.
+  localparam int INV_TAG_REAL_W = `MEM_LIDX_W - `L1D_SIDX_W;
+
+  assign inv_tag      = {{(`L1D_TAG_W - INV_TAG_REAL_W){1'b0}},
+                         inv_linea[`MEM_LIDX_W-1 : `L1D_SIDX_W]};
   assign inv_conjunto = inv_linea[`L1D_SIDX_W - 1 : 0];
 
   // ===========================================================================

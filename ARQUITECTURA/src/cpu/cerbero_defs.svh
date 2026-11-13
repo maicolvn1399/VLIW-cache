@@ -448,14 +448,33 @@
 // pueden ser distintos de cero. Se guardan los 21 igual: comparar de mas no
 // cuesta correccion, y el dia que la memoria crezca no hay nada que cambiar.
 //------------------------------------------------------------------------------
-`define L1D_BYTES    4096
-`define L1D_WAYS        2
-`define L1D_SETS       64          // L1D_BYTES / LINE_BYTES / L1D_WAYS
-`define L1D_SIDX_W      6          // log2(L1D_SETS)
-`define L1D_TAG_W      21          // XLEN - L1D_SIDX_W - LINE_OFF_W
+// La configuracion del enunciado es la de por defecto. Las cuatro constantes
+// de abajo se pueden redefinir desde la linea de comandos para comparar
+// configuraciones (tools/barrido_cache.sh), y por eso van con guarda: una
+// definicion de -D gana sobre la de aqui.
+//
+// Hay que dar las CUATRO juntas y coherentes entre si, porque el preprocesador
+// de Verilog no sabe dividir ni sacar logaritmos. tb_l1_dcache.sv comprueba la
+// coherencia en tiempo de elaboracion, asi que una combinacion mal escrita
+// falla de inmediato en vez de producir una cache silenciosamente rota.
+`ifndef L1D_BYTES
+  `define L1D_BYTES  4096
+`endif
+`ifndef L1D_WAYS
+  `define L1D_WAYS      2
+`endif
+`ifndef L1D_SETS
+  `define L1D_SETS     64          // L1D_BYTES / LINE_BYTES / L1D_WAYS
+`endif
+`ifndef L1D_SIDX_W
+  `define L1D_SIDX_W    6          // log2(L1D_SETS)
+`endif
 
-`define L1D_SET   10:5             // bits de conjunto en la direccion de byte
-`define L1D_TAG   31:11            // bits de etiqueta
+// Estas si se derivan, porque son aritmetica y no logaritmos.
+`define L1D_TAG_W (`XLEN - `L1D_SIDX_W - `LINE_OFF_W)
+
+`define L1D_SET  (`L1D_SIDX_W + `LINE_OFF_W - 1):`LINE_OFF_W
+`define L1D_TAG  (`XLEN - 1):(`L1D_SIDX_W + `LINE_OFF_W)
 
 //------------------------------------------------------------------------------
 // Hit time de cada nivel, en ciclos de procesador (enunciado 3.2.2 y 3.2.3)
@@ -463,10 +482,18 @@
 // L1 se resuelve en el mismo ciclo en que se presenta la direccion, igual que
 // la dmem del Proyecto I: la salida esta registrada y el dato llega a MEM.
 //
-// L2_HIT_CYCLES todavia no se usa: no hay L2 hasta la Iteracion 4. Se define
+// L2_HIT_CYCLES la usa l2_cache.sv para su contador de latencia. Se define
 // aqui para que el dia que entre, el numero salga de un solo lugar.
 //------------------------------------------------------------------------------
 `define L1_HIT_CYCLES 1
 `define L2_HIT_CYCLES 8
+
+// Geometria de la L2, la que fija el enunciado: 16 KB, 4 vias, lineas de 32 B.
+//   L2_SETS = L2_BYTES / LINE_BYTES / L2_WAYS = 16384 / 32 / 4 = 128
+// top.sv las pasa como parametros a l2_cache y tb_programa.sv las usa para
+// rotular el informe, asi que la geometria se dice en un solo lugar.
+`define L2_BYTES  16384
+`define L2_WAYS       4
+`define L2_SETS     128
 
 `endif // CERBERO_DEFS_SVH
