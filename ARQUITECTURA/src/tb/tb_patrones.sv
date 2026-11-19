@@ -27,6 +27,13 @@
 //
 // Los tres hacen exactamente 1024 lecturas, asi que la cuenta de accesos es la
 // misma y cualquier diferencia es atribuible al patron.
+//
+// Un cuarto programa, reuso, mide lo que los otros tres no pueden: el caso en
+// que la L2 si sirve. Dos pasadas sobre 8 KB, que no caben en la L1 y si en la
+// L2. Su oraculo tambien es exacto (patron_reuso.s lo calcula):
+//
+//   reuso       512 lecturas, 512 fallos de L1. En L2, 256 fallos (primera
+//               pasada) y 256 aciertos (segunda), sin invalidaciones.
 // =============================================================================
 
 `include "cerbero_defs.svh"
@@ -45,15 +52,17 @@ module tb_patrones;
   localparam int SEC_ACIERTOS = 896;   // 1024 - 128
   localparam int STR_FALLOS   = 1024;  // una linea nueva cada vez
   localparam int STR_ACIERTOS = 0;
+  localparam int REU_LINEAS   = 256;   // 8 KB, una lectura por linea
+  localparam int REU_ACCESOS  = 2 * REU_LINEAS;  // dos pasadas
 
   logic clk = 1'b0;
   logic rst_n;
   always #5 clk = ~clk;
 
-  logic hs, ha, hr;                       // halted de cada uno
+  logic hs, ha, hr, hu;                   // halted de cada uno
   /* verilator lint_off UNUSEDSIGNAL */
-  logic [`XLEN-1:0] ps, pa, pr;
-  logic [`NREGS-1:0][`XLEN-1:0] rs, ra, rr;
+  logic [`XLEN-1:0] ps, pa, pr, pu;
+  logic [`NREGS-1:0][`XLEN-1:0] rs, ra, rr, ru;
   /* verilator lint_on UNUSEDSIGNAL */
 
   logic [31:0] s_ldh, s_ldm, s_sth, s_stm;
@@ -62,6 +71,8 @@ module tb_patrones;
   logic [31:0] s_mem_acc, a_mem_acc, r_mem_acc;
   logic [31:0] s_inv, a_inv, r_inv;
   logic        s_dren, a_dren, r_dren;
+  logic [31:0] u_ldh, u_ldm, u_l2_ldh, u_l2_ldm, u_inv;
+  logic        u_dren;
 
   top #(.NUM_BUNDLES (N_BUNDLES), .NUM_WORDS (N_WORDS), .RESET_PC (32'h0))
   sec (
@@ -88,6 +99,15 @@ module tb_patrones;
       .perf_l1_store_hit (r_sth), .perf_l1_store_miss (r_stm),
       .perf_mem_accesos (r_mem_acc), .perf_inv_ejecutadas (r_inv),
       .mem_drenada (r_dren)
+  );
+
+  top #(.NUM_BUNDLES (N_BUNDLES), .NUM_WORDS (N_WORDS), .RESET_PC (32'h0))
+  reu (
+      .clk (clk), .rst_n (rst_n), .halted (hu), .psw (pu), .dbg_regs (ru),
+      .perf_l1_load_hit (u_ldh), .perf_l1_load_miss (u_ldm),
+      .perf_l2_load_hit (u_l2_ldh), .perf_l2_load_miss (u_l2_ldm),
+      .perf_inv_ejecutadas (u_inv),
+      .mem_drenada (u_dren)
   );
 
   // ---------------------------------------------------------------------------
@@ -145,6 +165,7 @@ module tb_patrones;
     $readmemh("../../tools/programas/patron_secuencial.hex", sec.u_imem.storage);
     $readmemh("../../tools/programas/patron_aleatorio.hex",  ale.u_imem.storage);
     $readmemh("../../tools/programas/patron_stride.hex",     str.u_imem.storage);
+    $readmemh("../../tools/programas/patron_reuso.hex",      reu.u_imem.storage);
 
     rst_n = 1'b0;
     repeat (4) @(posedge clk);
@@ -155,22 +176,22 @@ module tb_patrones;
     $display("    los tres hacen %0d lecturas sobre la misma jerarquia", N_ACCESOS);
 
     c = 0;
-    while (!(hs && ha && hr) && c < TOPE) begin
+    while (!(hs && ha && hr && hu) && c < TOPE) begin
       @(posedge clk);
       c++;
     end
     repeat (8) @(posedge clk);
 
     c = 0;
-    while (!(s_dren && a_dren && r_dren) && c < 200000) begin
+    while (!(s_dren && a_dren && r_dren && u_dren) && c < 200000) begin
       @(posedge clk);
       c++;
     end
     #1;
 
-    check1("los tres programas llegaron a HALT", hs && ha && hr);
+    check1("los cuatro programas llegaron a HALT", hs && ha && hr && hu);
     check1("y ninguno registro fallas",
-           !ps[`PSW_EXC] && !pa[`PSW_EXC] && !pr[`PSW_EXC]);
+           !ps[`PSW_EXC] && !pa[`PSW_EXC] && !pr[`PSW_EXC] && !pu[`PSW_EXC]);
 
     // ------------------------------------------------------------------------
     $display("");
@@ -255,6 +276,25 @@ module tb_patrones;
              s_inv, a_inv, r_inv);
     check1("el costo de la inclusion es bajo en los tres",
            (s_inv + a_inv + r_inv) < (N_ACCESOS / 4));
+
+    // ------------------------------------------------------------------------
+    $display("");
+    $display("[6] reuso: cabe en L2 y no en L1");
+    // ------------------------------------------------------------------------
+    // 256 lineas caen 4 por conjunto en la L1 de 2 vias: con LRU sobre un
+    // recorrido ciclico, la segunda pasada no encuentra ninguna. En la L2 caen
+    // 2 por conjunto en 4 vias y caben todas.
+    check("hizo las dos pasadas de 256 lecturas", u_ldh + u_ldm, REU_ACCESOS);
+    check("la L1 fallo todas, en las dos pasadas", u_ldm, REU_ACCESOS);
+    check("y no acerto ninguna",                    u_ldh, 0);
+    check("dos pasadas completas (r5)",             ru[5], 2);
+`ifndef CERBERO_SIN_L2
+    check("la primera pasada fallo en L2 (arranque)", u_l2_ldm, REU_LINEAS);
+    check("la segunda acerto en L2 todas sus lineas", u_l2_ldh, REU_LINEAS);
+    check("sin invalidaciones: la L2 no expulso nada", u_inv, 0);
+`else
+    check("sin L2 no hay accesos a L2", u_l2_ldh + u_l2_ldm, 0);
+`endif
 
 `ifdef FORCE_FAIL
     check("caso inyectado a proposito", tests_run, -1);
