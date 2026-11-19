@@ -28,6 +28,8 @@
 //   6. Un bundle congelado por stall se cuenta una sola vez, al avanzar
 //   7. Saltos tomados y delay slots desperdiciados
 //   8. Los contadores saturan y encienden el bit de desbordamiento
+//   I5b. Los ciclos de stall por fallo de L1 se reparten segun acierte o
+//        falle la L2 en esa misma lectura
 // =============================================================================
 
 `include "cerbero_defs.svh"
@@ -68,6 +70,12 @@ module tb_perf_counters;
   logic ev_mem_ocupado   = 1'b0;
   logic [31:0] inv_ejecutadas, mem_accesos, mem_ciclos;
 
+  // Iteracion 5: reparto de los ciclos de stall por fallo de L1 segun lo que
+  // hizo la L2 con esa lectura. ev_relleno_fin marca el ciclo en que la linea
+  // llega a la L1 y el fallo termina.
+  logic ev_relleno_fin = 1'b0;
+  logic [31:0] stall_por_miss, stall_l2_hit, stall_l2_miss;
+
   // Salidas de los contadores L2 de la instancia ancha
   logic [31:0] l2_load_hit, l2_load_miss, l2_store_hit, l2_store_miss;
   logic [31:0] stall_por_evict;
@@ -98,6 +106,7 @@ module tb_perf_counters;
       .ev_inv_ejecutada (ev_inv_ejecutada),
       .ev_mem_acceso    (ev_mem_acceso),
       .ev_mem_ocupado   (ev_mem_ocupado),
+      .ev_relleno_fin   (ev_relleno_fin),
 
       .ciclos         (ciclos),
       .bundles        (bundles),
@@ -113,9 +122,11 @@ module tb_perf_counters;
       .l1_load_miss   (),
       .l1_store_hit   (),
       .l1_store_miss  (),
-      .stall_por_miss (),
+      .stall_por_miss (stall_por_miss),
       .stall_por_wb   (),
       .stall_por_raw  (),
+      .stall_l2_hit   (stall_l2_hit),
+      .stall_l2_miss  (stall_l2_miss),
       .l2_load_hit    (l2_load_hit),
       .l2_load_miss   (l2_load_miss),
       .l2_store_hit   (l2_store_hit),
@@ -164,6 +175,7 @@ module tb_perf_counters;
       .ev_inv_ejecutada (ev_inv_ejecutada),
       .ev_mem_acceso    (ev_mem_acceso),
       .ev_mem_ocupado   (ev_mem_ocupado),
+      .ev_relleno_fin   (ev_relleno_fin),
 
       .ciclos         (ciclos_chico),
       .bundles        (bundles_chico),
@@ -630,6 +642,84 @@ module tb_perf_counters;
     // lo que pide 5.3: ciclos ocupados sobre ciclos totales.
     check("y hay con que calcular la utilizacion",
           (mem_accesos > 0 && mem_ciclos > 0), 1'b1);
+
+    // -------------------------------------------------------------------------
+    $display("");
+    $display("[I5b] stall por fallo de L1, separado segun la L2");
+    // -------------------------------------------------------------------------
+    // El tipo de fallo recien se sabe cuando la L2 evalua, y para entonces ya
+    // pasaron ciclos de stall. Esos ciclos tienen que quedar del lado que
+    // decida la L2, no del lado de "todavia no se sabe". Nada se reparte hasta
+    // que la linea llega a la L1.
+
+    reiniciar();
+
+    // Fallo de L1 que acierta en L2: 10 ciclos de stall, la L2 acierta en el
+    // cuarto, la linea llega en el undecimo (ese ciclo ya no es stall)
+    ev_l1[4] = 1'b1;
+    for (i = 0; i < 10; i = i + 1) begin
+      ev_l2_load_hit = (i == 3);
+      @(posedge clk); #1;
+    end
+    ev_l2_load_hit = 1'b0;
+    check("mientras el fallo esta en vuelo no se reparte", stall_l2_hit, 0);
+    check("ni del lado del fallo de L2",                   stall_l2_miss, 0);
+    check("stall_por_miss si corre ciclo a ciclo",         stall_por_miss, 10);
+    ev_l1[4] = 1'b0;
+    ev_relleno_fin = 1'b1;
+    @(posedge clk); #1;
+    ev_relleno_fin = 1'b0;
+    check("al llegar la linea, los 10 van a stall_l2_hit", stall_l2_hit, 10);
+    check("y stall_l2_miss sigue en cero",                 stall_l2_miss, 0);
+
+    // Fallo de L1 que tambien falla en L2: 25 ciclos, la L2 decide en el
+    // tercero. Los dos primeros, anteriores a la decision, igual son del fallo.
+    ev_l1[4] = 1'b1;
+    for (i = 0; i < 25; i = i + 1) begin
+      ev_l2_load_miss = (i == 2);
+      @(posedge clk); #1;
+    end
+    ev_l2_load_miss = 1'b0;
+    ev_l1[4] = 1'b0;
+    ev_relleno_fin = 1'b1;
+    @(posedge clk); #1;
+    ev_relleno_fin = 1'b0;
+    check("los 25 ciclos van a stall_l2_miss", stall_l2_miss, 25);
+    check("y stall_l2_hit no se movio",        stall_l2_hit, 10);
+
+    // Un fallo de escritura en L2 (el write buffer drenando) mientras la L1
+    // espera una lectura que acierta: no es el fallo de esta lectura.
+    ev_l1[4] = 1'b1;
+    for (i = 0; i < 12; i = i + 1) begin
+      ev_l2_store_miss = (i == 1);
+      ev_l2_load_hit   = (i == 9);
+      @(posedge clk); #1;
+    end
+    ev_l2_store_miss = 1'b0;
+    ev_l2_load_hit   = 1'b0;
+    ev_l1[4] = 1'b0;
+    ev_relleno_fin = 1'b1;
+    @(posedge clk); #1;
+    ev_relleno_fin = 1'b0;
+    check("un fallo de escritura de L2 no marca la lectura", stall_l2_hit, 22);
+    check("stall_l2_miss no se movio",                       stall_l2_miss, 25);
+
+    // El fallo anterior no se arrastra: tras un fallo de L2, el siguiente
+    // fallo de L1 que acierta en L2 va del lado del acierto.
+    ev_l1[4] = 1'b1;
+    for (i = 0; i < 4; i = i + 1) begin
+      ev_l2_load_hit = (i == 0);
+      @(posedge clk); #1;
+    end
+    ev_l2_load_hit = 1'b0;
+    ev_l1[4] = 1'b0;
+    ev_relleno_fin = 1'b1;
+    @(posedge clk); #1;
+    ev_relleno_fin = 1'b0;
+    check("la marca de fallo de L2 no se arrastra", stall_l2_hit, 26);
+
+    check("stall_l2_hit + stall_l2_miss == stall_por_miss",
+          stall_l2_hit + stall_l2_miss, stall_por_miss);
 
 `ifdef FORCE_FAIL
     check("caso inyectado a proposito", bundles, 32'hDEAD);

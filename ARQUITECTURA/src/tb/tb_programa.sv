@@ -109,6 +109,7 @@ module tb_programa;
   // Iteracion 5, secciones 5.2 y 5.3 del enunciado
   logic [31:0]              hw_inv, hw_mem_acc, hw_mem_cic;
   logic [31:0]              hw_st_miss, hw_st_wb, hw_st_raw;
+  logic [31:0]              hw_st_l2h, hw_st_l2m;   // seccion 5.1
   logic                     hw_drenada;
   logic                     hw_desbordado;
 
@@ -140,6 +141,8 @@ module tb_programa;
       .perf_stall_miss     (hw_st_miss),
       .perf_stall_wb       (hw_st_wb),
       .perf_stall_raw      (hw_st_raw),
+      .perf_stall_l2_hit   (hw_st_l2h),
+      .perf_stall_l2_miss  (hw_st_l2m),
       .perf_l2_load_hit    (hw_l2_ldh),
       .perf_l2_load_miss   (hw_l2_ldm),
       .perf_l2_store_hit   (hw_l2_sth),
@@ -714,6 +717,10 @@ module tb_programa;
       $fdisplay(salida, "");
       $fdisplay(salida, "    ciclos perdidos, por causa");
       $fdisplay(salida, "      fallo de lectura           %10d", hw_st_miss);
+      // Un fallo de L1 cuesta muy distinto segun lo resuelva la L2 o la
+      // memoria principal; el promedio de arriba mezcla los dos casos.
+      $fdisplay(salida, "        que acerto en L2         %10d", hw_st_l2h);
+      $fdisplay(salida, "        que fallo en L2          %10d", hw_st_l2m);
       $fdisplay(salida, "      write buffer lleno         %10d", hw_st_wb);
       $fdisplay(salida, "      conflicto RAW              %10d", hw_st_raw);
       $fdisplay(salida, "      eviction buffer lleno      %10d", hw_st_evict);
@@ -770,6 +777,8 @@ module tb_programa;
       // El desglose tiene que sumar el contador global de stalls. Si no suma,
       // alguna causa se esta contando dos veces o falta una.
       comparar(salida, "suma de causas = stalls", total_stall, hw_stall);
+      comparar(salida, "stall_l2_hit + stall_l2_miss = stall_por_miss",
+               hw_st_l2h + hw_st_l2m, hw_st_miss);
 
       // Y todo acceso a la cache fue un load o un store del programa.
       comparar(salida, "accesos L1 = loads + stores", accesos,

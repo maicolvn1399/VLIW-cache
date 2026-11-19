@@ -155,6 +155,8 @@ module top #(
     output logic [31:0]                   perf_stall_wb,
     output logic [31:0]                   perf_stall_raw,
     output logic [31:0]                   perf_stall_evict, // <--- NUEVO [L2-04]
+    output logic [31:0]                   perf_stall_l2_hit,   // Iteracion 5, 5.1
+    output logic [31:0]                   perf_stall_l2_miss,  // Iteracion 5, 5.1
     output logic [31:0]                   perf_inv_ejecutadas, // Iteracion 5, 5.2
     output logic [31:0]                   perf_mem_accesos,    // Iteracion 5, 5.3
     output logic [31:0]                   perf_mem_ciclos,     // Iteracion 5, 5.3
@@ -1095,6 +1097,8 @@ module top #(
       .ev_inv_ejecutada (ev_inv_ejecutada),
       .ev_mem_acceso    (mem_sys_inicia_rd || mem_sys_inicia_wr),
       .ev_mem_ocupado   (mem_sys_ocupado),
+      // El fallo de L1 termina cuando el arbitro le entrega la linea
+      .ev_relleno_fin   (l1_mem_listo),
       .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
       .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
       .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
@@ -1118,6 +1122,8 @@ module top #(
       .stall_por_wb   (perf_stall_wb),
       .stall_por_raw  (perf_stall_raw),
       .stall_por_evict(perf_stall_evict),
+      .stall_l2_hit   (perf_stall_l2_hit),
+      .stall_l2_miss  (perf_stall_l2_miss),
       .inv_ejecutadas (perf_inv_ejecutadas),
       .mem_accesos    (perf_mem_accesos),
       .mem_ciclos     (perf_mem_ciclos),
