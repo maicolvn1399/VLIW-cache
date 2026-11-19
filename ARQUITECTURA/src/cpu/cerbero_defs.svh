@@ -488,6 +488,17 @@
 `define L1_HIT_CYCLES 1
 `define L2_HIT_CYCLES 8
 
+// Ciclos que un fallo de L2 paga ademas de L2_HIT_CYCLES y T_MEM. En un
+// acierto, EVALUAR es el ciclo en que la L2 levanta listo; en un fallo ese
+// ciclo ya es de espera, y despues de que llega la linea hay uno mas
+// (ACTUALIZAR) en que la L2 la escribe antes de entregarla (l2_cache.sv).
+//
+// Medido fallo por fallo: un fallo de L1 que acierta en L2 sin esperar al
+// write buffer cuesta exactamente L2_HIT_CYCLES = 8 ciclos de stall, y uno
+// que falla en L2, 8 + 53 + 2 = 63. Solo la usa el informe, para el AMAT
+// teorico de dos niveles.
+`define L2_MISS_EXTRA 2
+
 // Geometria de la L2, la que fija el enunciado: 16 KB, 4 vias, lineas de 32 B.
 //   L2_SETS = L2_BYTES / LINE_BYTES / L2_WAYS = 16384 / 32 / 4 = 128
 // top.sv las pasa como parametros a l2_cache y tb_programa.sv las usa para

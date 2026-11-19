@@ -675,6 +675,7 @@ module tb_programa;
     integer accesos, fallos, aciertos;
     integer accesos_l2, aciertos_l2;
     real tasa_fallos, penalidad_medida, amat;
+    real m_l1_lect, m_l2_lect, t_l2, amat2_teorico, amat2_medido;
     integer total_stall;
     begin
       accesos  = hw_l1_ldh + hw_l1_ldm + hw_l1_sth + hw_l1_stm;
@@ -746,6 +747,11 @@ module tb_programa;
       $fdisplay(salida, "      escrituras: fallos         %10d", hw_l2_stm);
       $fdisplay(salida, "    tasa de aciertos             %9.2f%%",
                 (accesos_l2 == 0) ? 0.0 : 100.0 * aciertos_l2 / accesos_l2);
+      // Tasa LOCAL: fallos de L2 sobre los accesos que le llegaron a la L2,
+      // no sobre los accesos del programa. Es la que entra en el AMAT.
+      $fdisplay(salida, "    tasa de fallos local         %9.2f%%",
+                (accesos_l2 == 0) ? 0.0 :
+                100.0 * (hw_l2_ldm + hw_l2_stm) / accesos_l2);
 
       // ---- Invalidaciones hacia atras (seccion 5.2) ------------------------
       // El enunciado las exige por haber elegido politica inclusiva: sirven
@@ -773,6 +779,45 @@ module tb_programa;
                 100.0 * hw_mem_cic / (hw_ciclos + guarda_drenado));
       $fdisplay(salida, "      ventana medida             %10d ciclos  (%0d del programa + %0d de drenado)",
                 hw_ciclos + guarda_drenado, hw_ciclos, guarda_drenado);
+
+      // ---- AMAT de dos niveles (seccion 5.1) --------------------------------
+      // Solo las lecturas detienen el pipeline (no-write-allocate en L1 y
+      // write buffer), asi que las dos tasas son de lecturas:
+      //   m_L1 = fallos de lectura de L1 / lecturas de L1
+      //   m_L2 = fallos de lectura de L2 / lecturas de L2   (tasa local)
+      //
+      //   AMAT teorico = T_L1 + m_L1 x (T_L2 + m_L2 x T_mem)
+      //
+      // T_L2 es L2_HIT_CYCLES y la penalidad de L2 es T_mem mas los dos ciclos
+      // de control de un fallo (L2_MISS_EXTRA, cerbero_defs.svh). El AMAT
+      // medido sale de los ciclos de stall reales; la diferencia con el
+      // teorico es lo que los fallos pagaron de mas esperando a que el arbitro
+      // terminara de drenar el write buffer.
+      m_l1_lect = ((hw_l1_ldh + hw_l1_ldm) == 0) ? 0.0 :
+                  (1.0 * hw_l1_ldm) / (hw_l1_ldh + hw_l1_ldm);
+      m_l2_lect = ((hw_l2_ldh + hw_l2_ldm) == 0) ? 0.0 :
+                  (1.0 * hw_l2_ldm) / (hw_l2_ldh + hw_l2_ldm);
+      t_l2      = 1.0 * `L2_HIT_CYCLES;
+
+      amat2_teorico = `L1_HIT_CYCLES +
+                      m_l1_lect * (t_l2 + m_l2_lect * (`T_MEM + `L2_MISS_EXTRA));
+      amat2_medido  = ((hw_l1_ldh + hw_l1_ldm) == 0) ? 1.0 * `L1_HIT_CYCLES :
+                      `L1_HIT_CYCLES + (1.0 * hw_st_miss) / (hw_l1_ldh + hw_l1_ldm);
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  AMAT de lectura con dos niveles");
+      $fdisplay(salida, "    m_L1 (lecturas)              %9.2f%%", 100.0 * m_l1_lect);
+      $fdisplay(salida, "    m_L2 local (lecturas)        %9.2f%%", 100.0 * m_l2_lect);
+      $fdisplay(salida, "    teorico                      %10.2f ciclos  (T_L1=%0d, T_L2=%0d, T_mem=%0d+%0d)",
+                amat2_teorico, `L1_HIT_CYCLES, `L2_HIT_CYCLES, `T_MEM, `L2_MISS_EXTRA);
+      $fdisplay(salida, "    medido                       %10.2f ciclos", amat2_medido);
+      $fdisplay(salida, "    penalidad medida, acierto L2 %10.1f ciclos  (minimo %0d)",
+                (hw_l2_ldh == 0) ? 0.0 : (1.0 * hw_st_l2h) / hw_l2_ldh,
+                `L2_HIT_CYCLES);
+      $fdisplay(salida, "    penalidad medida, fallo L2   %10.1f ciclos  (minimo %0d)",
+                (hw_l2_ldm == 0) ? 0.0 : (1.0 * hw_st_l2m) / hw_l2_ldm,
+                `L2_HIT_CYCLES + `T_MEM + `L2_MISS_EXTRA);
+
 
       // El desglose tiene que sumar el contador global de stalls. Si no suma,
       // alguna causa se esta contando dos veces o falta una.
