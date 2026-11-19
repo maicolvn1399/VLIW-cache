@@ -2,7 +2,7 @@
 
 CE-4301 Arquitectura de Computadores I · Proyecto Grupal II · Grupo #4 · CERBERO-1
 
-Actualizado tras la Iteración 4.
+Actualizado tras la Iteración 5.
 
 Las decisiones tomadas y las que faltan, en un solo lugar. Para cada una tomada: qué se escogió, por qué, y con qué evidencia. Para cada una pendiente: cuál es la recomendación y la razón, para llevarla al grupo antes de implementar.
 
@@ -16,11 +16,11 @@ El desarrollo completo de las políticas está en [jerarquia-memoria.md](jerarqu
 
 | # | Decisión | Alternativa descartada | Por qué | Evidencia |
 |---|---|---|---|---|
-| 1 | L1-D **write-through** | write-back | La L2 es write-back obligatoria. Con L1 también write-back habría líneas sucias en dos niveles, y haría falta invalidación hacia atrás con recogida del dato. Con write-through, L1 nunca tiene línea sucia. | 10 de 11 programas pierden 0 ciclos por buffer lleno |
+| 1 | L1-D **write-through** | write-back | La L2 es write-back obligatoria. Con L1 también write-back habría líneas sucias en dos niveles, y haría falta invalidación hacia atrás con recogida del dato. Con write-through, L1 nunca tiene línea sucia. | 13 de 14 programas pierden 0 ciclos por buffer lleno, con y sin L2 |
 | 2 | **No-write-allocate** | write-allocate | Con write-through, traer una línea de 53 ciclos para escribirla hacia abajo de todos modos paga la latencia sin ganar nada. | aciertos de escritura = 0, exacto, comprobado |
 | 3 | **LRU exacto**, 1 bit por conjunto | FIFO, aleatorio, pseudo-LRU | A dos vías el LRU exacto cuesta un bit: 64 bits para toda la caché. A ese precio, aproximar no ahorra nada. | 384 aciertos exactos en `recorrido_cache.s` |
-| 4 | **Stall** para el riesgo RAW | store-to-load forwarding | El forwarding desde el buffer exige resolver máscaras de byte con prioridad por antigüedad, en el camino crítico del acierto de un ciclo. El profesor aceptó el stall. | **1 ciclo** perdido en los 11 programas |
-| 5 | Inclusión **inclusiva** (L1 subconjunto de L2) | NINE, exclusiva | **Cambiada en la Iteración 4**, ver la nota de abajo. La implementación lleva invalidación hacia atrás desde L2 hacia L1. | `tb_l1_dcache.sv` caso [INV] y `tb_l2_cache.sv` caso [7] |
+| 4 | **Stall** para el riesgo RAW | store-to-load forwarding | El forwarding desde el buffer exige resolver máscaras de byte con prioridad por antigüedad, en el camino crítico del acierto de un ciclo. El profesor aceptó el stall. | **1 ciclo** en los 11 programas de la Iteración 3; **0** en las 154 corridas del barrido |
+| 5 | Inclusión **inclusiva** (L1 subconjunto de L2) | NINE, exclusiva | Con L1 write-through, invalidar es solo apagar un bit de válido. Hace medible el costo de coherencia entre niveles que pide el enunciado. Ver la nota de abajo. | **0 invalidaciones** con la geometría del proyecto; solo aparecen con L2 del tamaño de L1 |
 | 6 | **Sin L1 de instrucciones** | L1-I de 4 KB | Indicación del profesor: corre un programa a la vez, no agregaría nada medible. | n/a |
 
 ### Dimensionamiento
@@ -28,8 +28,10 @@ El desarrollo completo de las políticas está en [jerarquia-memoria.md](jerarqu
 | # | Decisión | Rango permitido | Por qué | Evidencia |
 |---|---|---|---|---|
 | 7 | Write buffer L1 a L2: **8 entradas** | 2 a 8 | Un store entra por ciclo y drenar cuesta 53, así que ninguna profundidad salva una ráfaga sostenida. Lo que compra es tolerancia a ráfagas cortas, y ahí más es mejor sin costo de latencia. Lo que de verdad baja la presión es la fusión. | solo el programa hecho para saturarlo pierde ciclos |
-| 8 | Eviction buffer L2 a memoria: **8 entradas** | 4 a 16 | La L2 write-back solo genera tráfico al expulsar, no en cada escritura, así que 16 serían estado sin uso. | **ninguna**, ver pendiente P5 |
-| 9 | L1-D de **4 KB, 2 vías, líneas de 32 B** | lo fija el enunciado | Además de venir dado, el barrido lo confirma como el codo. | +43,49 pp al llegar a 4 KB, +0,00 pp al pasarse |
+| 8 | Eviction buffer L2 a memoria: **8 entradas** | 4 a 16 | La L2 write-back solo genera tráfico al expulsar, no en cada escritura, así que 16 serían estado sin uso. | **0 ciclos** lleno en las 140 corridas con L2; 5959 sin L2 (P5) |
+| 9 | L1-D de **4 KB, 2 vías, líneas de 32 B** | lo fija el enunciado | Además de venir dado, el barrido lo confirma como el codo. Con L2, quedarse corto de L1 cuesta 8 ciclos por fallo en vez de 54. | codo de `recorrido_cache` en 4 KB; pasarse rinde 9 % como máximo |
+| 20 | L2 de **16 KB, 4 vías, hit time de 8 ciclos** | lo fija el enunciado | El barrido de capacidad de L2 lo confirma: es el primer tamaño cuatro veces la L1. | 86 % de la ganancia disponible del aleatorio; una L2 de 4 KB es peor que no tener L2; penalidad de acierto medida: 8,0 |
+| 21 | Reemplazo de L2: **LRU exacto con edades** | pseudo-LRU de árbol | Ver P1. | 256 aciertos de L2 exactos en `patron_reuso.s` |
 
 ### Microarquitectura e implementación
 
@@ -47,28 +49,25 @@ El desarrollo completo de las políticas está en [jerarquia-memoria.md](jerarqu
 
 | # | Decisión | Por qué |
 |---|---|---|
-| 17 | La caché se escribió para **exactamente 2 vías**, con guardia que aborta la elaboración si se pide otra | Generalizar a N vías es trabajo que hace falta de todos modos para la L2 de 4 vías, así que se hace una sola vez, en la Iteración 4. El guardia existe porque con `L1D_WAYS=1` la simulación no fallaba: se colgaba 2,5 millones de ciclos leyendo `x`. |
-| 18 | El barrido varía **capacidad**, no asociatividad | Consecuencia de la 17. |
+| 17 | La L1 se escribió para **exactamente 2 vías** | Generalizar a N vías se hizo una sola vez, en el módulo nuevo de la L2. ⚠️ La L1 no tiene guardia: con `L1D_WAYS=1` la simulación no falla, se cuelga 2,5 millones de ciclos leyendo `x`. La L2 sí aborta ante una geometría incoherente. |
+| 18 | El barrido varía **capacidad**, no asociatividad | Consecuencia de la 17 para la L1; en la L2 se dejaron las 4 vías fijas para comparar solo capacidad. |
 | 19 | Se escribió un benchmark nuevo, `recorrido_cache.s` | Los diez programas del Proyecto I tocan dos o tres líneas cada uno, así que todos sus fallos son de arranque y el barrido salía plano en un rango de 32 veces. Sin un programa cuyo conjunto de trabajo no quepa, el experimento no puede medir geometría. |
+| 22 | Se escribió un cuarto patrón, `patron_reuso.s` | El secuencial y el stride tocan cada línea una vez, así que la L2 nunca puede acertar. Hacía falta reuso a una distancia que L1 no cubre y L2 sí: 8 KB, el doble de L1 y la mitad de L2. |
+| 23 | Línea base **sin L2** con `-DCERBERO_SIN_L2`, sobre el mismo RTL | Para medir lo que aporta la L2 hay que compararla contra el mismo sistema sin ella, no contra un modelo aparte ni contra la Iteración 3, que tenía otro arbitraje. |
 
 ### Nota sobre la decisión 5: se cambió sobre la marcha
 
 Hasta la Iteración 3 la política documentada y acordada era **NINE**, con tres argumentos: que la inclusión sirve para coherencia multinúcleo y aquí hay un solo núcleo, que obliga a implementar invalidación hacia atrás, y que con L1 write-through NINE es seguro porque L1 nunca tiene líneas sucias. El profesor además recomendó explícitamente no usar inclusiva porque complica más.
 
-La Iteración 4 se implementó **inclusiva**. El riesgo que señalaba la justificación de NINE se materializó: la invalidación hacia atrás venía rota (reconstruía la etiqueta de L1 leyendo bits fuera de rango de un vector de 11 bits, así que la comparación no daba verdadero nunca) y nadie lo detectó porque su prueba no comprobaba nada. Ya está arreglado y probado.
+La Iteración 4 se implementó **inclusiva**. El riesgo que señalaba la justificación de NINE se materializó: la invalidación hacia atrás venía rota (reconstruía la etiqueta de L1 leyendo bits fuera de rango de un vector de 11 bits, así que la comparación no daba verdadero nunca) y nadie lo detectó porque su prueba no comprobaba nada. Se arregló y la prueba ahora comprueba el efecto.
 
-**Esto queda para que lo decida el grupo**, porque cambia la documentación de entrega:
-
-- **Quedarse con inclusiva.** Ya funciona y está probada. Hay que reescribir la justificación en [jerarquia-memoria.md](jerarquia-memoria.md) explicando por qué se prefirió pese a la recomendación del profesor. Es defendible si se argumenta que demuestra dominio del mecanismo de coherencia entre niveles.
-- **Volver a NINE.** Se borra el camino de invalidación, que es lógica y superficie de error de menos, y la justificación ya escrita queda consistente. Es lo más simple y lo que el profesor recomendó.
-
-Mientras no se decida, los documentos de entrega siguen diciendo NINE y el código hace inclusiva. Hay que alinearlos antes de entregar.
+**Resuelta en la Iteración 5: se queda inclusiva.** Con el mecanismo funcionando, la medición decidió: con la geometría del proyecto (L2 cuatro veces la L1) hubo **cero invalidaciones** en los 14 programas, así que volver a NINE era borrar lógica probada sin ganar ningún ciclo. La justificación completa, con lo medido, está en [jerarquia-memoria.md](jerarquia-memoria.md) D6 y en [analisis-rendimiento.md](analisis-rendimiento.md) §10.
 
 ---
 
 ## Decisiones pendientes
 
-Cinco de la Iteración 4 y una de la 5. Cada una con la recomendación para llevar al grupo.
+Cinco de la Iteración 4 y una de la 5, todas resueltas salvo la confirmación de P4 con el profesor. Se conservan con su recomendación original, porque es la justificación de lo que se hizo.
 
 ### P1. Reemplazo de L2 (4 vías)
 
@@ -110,36 +109,34 @@ La recomendación original: dejar la `imem` como está y documentar que la L2 es
 
 ### P5. Revisar la profundidad del eviction buffer
 
-La decisión 8 es la única del proyecto tomada **sin medición**, porque la L2 que alimenta ese buffer no existe todavía.
+**RESUELTA en la Iteración 5: se queda en 8.** El contador `stall_por_evict` marca **0** en las 140 corridas del barrido con L2 (10 configuraciones × 14 programas). La L2 write-back se queda con los stores sucios y casi no expulsa durante el programa.
 
-**El contador ya existe** (`stall_por_evict`, el contador 22), agregado en la Iteración 4 y comprobado en `tb_perf_counters.sv`. **Falta usarlo para decidir**: con los once benchmarks actuales marca cero, lo que apunta a bajar la profundidad de 8 a 4, pero conviene medirlo con programas que generen más expulsiones antes de cambiarlo.
+La contraprueba es la configuración sin L2, donde cada store baja directo al eviction buffer: ahí `recorrido_cache.s` pierde **5959 ciclos** con el buffer lleno. El buffer no alcanza por suerte; es la L2 la que le quita la presión, que era el razonamiento original de la decisión 8.
 
-El razonamiento original de por qué hacía falta ese contador: Cuando el eviction buffer se llena, el write buffer de arriba no puede drenar:
+La recomendación anterior era bajarlo a 4 si el contador salía en cero. No se hizo porque no se midió con 4: dejar 8, dentro del rango del enunciado y con un número que lo respalda, es más defendible que bajarlo sin medir.
 
-```systemverilog
-assign wb_head_ack = wb_head_valido && !mem_ev_lleno;
-```
-
-Así que la presión se propaga hacia arriba y termina apareciendo como `stall_por_wb`, el contador de "write buffer lleno". El síntoma se ve, pero **la causa no se distingue**: con los 21 contadores actuales no hay forma de saber si el write buffer se llenó porque drenar cuesta 53 ciclos o porque el buffer de abajo estaba lleno. Y esas dos causas piden arreglos opuestos, subir una profundidad o la otra.
-
-Entonces el orden es: primero un contador 22 que cuente los ciclos en que `mem_ev_lleno` frena el drenado, y con ese número decidir. Si sale en cero, como salió el write buffer en 10 de 11 programas, bajar a 4 y ahorrar el estado; si aparece, subir hacia 16. Lo que no conviene es dejarlo en 8 sin medirlo, porque sería la única cifra del informe que no se puede defender con un número.
+El razonamiento original de por qué hacía falta ese contador: cuando el eviction buffer se llena, el write buffer de arriba no puede drenar, y la presión se ve como `stall_por_wb`. Sin un contador propio no se podía distinguir si el write buffer se llenaba porque drenar cuesta 53 ciclos o porque el buffer de abajo estaba lleno, y esas dos causas piden arreglos opuestos.
 
 ### P6. Qué comparar en la Iteración 5
 
-**Recomendación: la salida de NOVA contra el ensamblador escrito a mano, programa por programa, pasando el código de NOVA por los mismos contadores.** Hay una razón concreta: la salida actual de NOVA da ocupación de **0,48 de 5 ranuras y nunca pone dos operaciones en un bundle**, contra 1,56 de `lazo_estres.s`. Además, **44 % de las instrucciones que emite son accesos a memoria**, porque no asigna registros y baja cada temporal al marco de pila.
+**RESUELTA en la Iteración 5**, en dos mediciones que se complementan:
 
-Eso hace que la comparación interesante no sea solo de ocupación sino de **presión sobre la caché**: hoy la asignación de registros de NOVA es el factor que más accesos a L1-D genera, y un allocator reduce bundles y accesos a la vez. Esa es la métrica que une los dos cursos, y vale definirla antes de empezar la iteración.
+- **La jerarquía**, con los cuatro patrones de acceso y un barrido de 11 configuraciones: con y sin L2, capacidad de L1 de 512 B a 16 KB y de L2 de 4 a 64 KB. Ver [analisis-rendimiento.md](analisis-rendimiento.md) §7 a §11.
+- **El compilador**, con 39 programas de NOVA en `-O0`, `-O1` y `-O2` sobre el mismo RTL, medido por el equipo de CE1108. Ver [ITERACION5_NIVELES.md](../../documentacion/ITERACION5_NIVELES.md) y su resumen en [analisis-rendimiento.md](analisis-rendimiento.md) §12.
+
+La recomendación era medir la presión sobre la caché además de la ocupación, y eso es lo que salió: de los ciclos que ahorra `-O2`, el 91,5 % viene de emitir menos operaciones (sobre todo accesos al marco de pila) y solo el 8,5 % de empaquetar mejor. Los accesos a memoria caen un 61,9 % y los ciclos un 30,3 %.
 
 ---
 
 ## Resumen
 
-19 decisiones tomadas. De ellas:
+23 decisiones tomadas. De ellas:
 
-- **Siete están respaldadas por una medición** (1, 2, 3, 4, 7, 9, 19): hay un número del hardware que las defiende.
+- **Once están respaldadas por una medición** (1, 2, 3, 4, 5, 7, 8, 9, 19, 20, 21): hay un número del hardware que las defiende.
 - **Cinco fueron validadas por una prueba que encontró un error real** (11, 12, 13, 14, 17): no se sabía que hacían falta hasta que el testbench mostró el defecto.
-- **Cuatro son de razonamiento** sobre consecuencias de otras decisiones o del enunciado (5, 10, 15, 18).
-- **Dos vienen dadas** por indicación del profesor o del enunciado (6, 9 en su parte de geometría).
-- **Una está sin respaldo de ningún tipo** y es la 8, la profundidad del eviction buffer. Es justamente el pendiente P5.
+- **Cinco son de razonamiento** sobre consecuencias de otras decisiones o del enunciado, o sobre cómo medir (10, 15, 18, 22, 23).
+- **Dos vienen dadas** por indicación del profesor o del enunciado (6, y la geometría de 9 y 20).
 
-6 decisiones pendientes, todas con recomendación: dos tienen la respuesta forzada por decisiones ya tomadas (P2 y P3), una necesita confirmación del profesor (P4), una necesita un contador nuevo antes de poder decidirse (P5), y dos son juicios abiertos (P1 y P6).
+La 8, la profundidad del eviction buffer, era la única sin respaldo; desde la Iteración 5 tiene su medición (P5).
+
+Las 6 decisiones pendientes quedaron resueltas. Solo P4, la lectura de "L2 unificada" cuando no hay L1 de instrucciones, sigue esperando la confirmación del profesor.

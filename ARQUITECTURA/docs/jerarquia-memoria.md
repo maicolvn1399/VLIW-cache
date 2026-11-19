@@ -13,7 +13,7 @@ Complementos: [organizacion.md](organizacion.md) (microarquitectura), [analisis-
 | Nivel | Capacidad | Asociat. | Línea | Conjuntos | Hit time | Escritura | Estado |
 |---|---|---|---|---|---|---|---|
 | L1-D | 4 KB | 2 vías | 32 B | 64 | 1 ciclo | write-through, no-write-allocate | implementado |
-| L2 unificada | 16 KB | 4 vías | 32 B | 128 | 8 ciclos | write-back (lo exige el enunciado) | Iteración 4 |
+| L2 unificada | 16 KB | 4 vías | 32 B | 128 | 8 ciclos | write-back, write-allocate | implementado |
 | Memoria principal | 64 KB | n/a | n/a | n/a | 53 ciclos | n/a | implementado |
 
 No hay L1 de instrucciones, por indicación del profesor: corre un programa a la vez, así que no agregaría nada medible.
@@ -52,8 +52,8 @@ Los 53 ciclos no son supuestos: `tb_mem_system.sv` mide el intervalo real entre 
          │         │ máscara; fusiona       │
          │         └────────────┬───────────┘
       ┌──▼──────────────────────▼──────┐
-      │  L2  16 KB, 4 vías             │  ◄── Iteración 4
-      │  write-back, NINE              │
+      │  L2  16 KB, 4 vías, LRU edades │  ──► invalidación hacia
+      │  write-back, inclusiva         │      atrás sobre L1-D
       └──┬──────────────────────┬──────┘
          │                      │ línea sucia expulsada
          │         ┌────────────▼───────────┐
@@ -71,7 +71,9 @@ Los 53 ciclos no son supuestos: `tb_mem_system.sv` mide el intervalo real entre 
       └────────────────────────────────┘
 ```
 
-Mientras la L2 no exista, el write buffer y el camino de fallo van directo al controlador. El hueco ya está preparado: el write buffer habla el mismo protocolo (`req` / `listo`, línea de 256 bits más máscara de 32) que hablará con la L2.
+El árbitro de L2 (`l2_arbiter.sv`) atiende por turnos los fallos de lectura de L1 y el drenado del write buffer, porque la L2 tiene un solo puerto. Los dos hablan el mismo protocolo (`req` / `listo`, línea de 256 bits más máscara de 32).
+
+Para medir cuánto aporta la L2 existe una configuración sin ella: compilando con `-DCERBERO_SIN_L2`, `top.sv` conecta el árbitro directo a memoria principal (lecturas por `mem_system`, escrituras al eviction buffer). Es el mismo RTL con un nivel menos, no un modelo aparte, y es la línea base de [analisis-rendimiento.md](analisis-rendimiento.md) §8.
 
 ---
 
@@ -83,9 +85,9 @@ Mientras la L2 no exista, el write buffer y el camino de fallo van directo al co
 
 **Razón.** La L2 del enunciado es obligatoriamente write-back. Si L1 también lo fuera, habría líneas sucias en dos niveles a la vez y harían falta tres cosas: invalidación hacia atrás con recogida del dato cuando L2 expulsa algo que L1 tiene sucio, un orden de escritura definido hacia memoria, y una definición de "drenado" al final del programa. Con write-through L1 nunca tiene una línea sucia, la L2 es la única dueña de los datos sucios, y los tres problemas desaparecen.
 
-El profesor lo planteó en ambos sentidos: write-through es más simple pero complica la inclusión, y write-back es más complicado. Aquí la complicación de la inclusión se evita con NINE (D6), así que write-through se queda sin su desventaja principal.
+El profesor lo planteó en ambos sentidos: write-through es más simple pero complica la inclusión, y write-back es más complicado. Aquí pasa lo contrario de lo que se temía: como L1 nunca tiene una línea sucia, la invalidación hacia atrás que exige la inclusión (D6) se reduce a apagar un bit de válido. No hay dato que recoger antes de invalidar.
 
-**Costo medido.** Cada store cruza la frontera, y eso es lo que absorbe el write buffer. De 11 programas, **10 pierden cero ciclos** por buffer lleno. El único que paga es `recorrido_cache.s`, escrito a propósito para saturarlo: 5035 de 17 706 ciclos.
+**Costo medido.** Cada store cruza la frontera, y eso es lo que absorbe el write buffer. En la Iteración 3, sin L2, de 11 programas **10 perdieron cero ciclos** por buffer lleno, y el único que pagó fue `recorrido_cache.s`, escrito a propósito para saturarlo: 5035 de 17 706 ciclos. Con la L2 el resultado se mantiene en los 14 programas del barrido: 13 pierden cero y `recorrido_cache.s` pierde 6665 de 13 312. Sube porque la L2 es write-allocate: cada una de las 129 líneas que drena el buffer falla en L2 y obliga a traerla de memoria antes de escribirla, cosa que sin L2 no pasa (ver [analisis-rendimiento.md](analisis-rendimiento.md) §8).
 
 **Lo que obligó a implementar.** Un `SB` o `SH` escribe 1 o 2 bytes, y con write-through ese store parcial tiene que viajar sin arrastrar los bytes vecinos, que pueden no estar en la caché. Por eso cada entrada del buffer lleva una **máscara de 32 bits, uno por byte**, y la memoria tiene escritura habilitada por byte. Sin la máscara, un `SB` grabaría 31 bytes de basura.
 
@@ -117,32 +119,55 @@ Es un argumento sobre esta asociatividad, no sobre LRU en general: con 4 vías e
 
 El profesor dijo que el stall es aceptable si el forwarding no se puede implementar. Aquí no es que no se pudo: es que cuesta menos que no equivocarse en el forwarding.
 
-**Costo medido: un (1) ciclo** en los 11 programas, en `lazo_estres.s`. Eso es todo lo que el forwarding habría ahorrado.
+**Costo medido: un (1) ciclo** en los 11 programas de la Iteración 3, en `lazo_estres.s`, y **cero** en las 154 corridas del barrido de la Iteración 5. Eso es todo lo que el forwarding habría ahorrado.
 
 ```systemverilog
 assign espera_raw = falla_lectura && wb_conflicto;
 assign mem_req    = (estado == ESPERA) ? (falla_lectura && !wb_conflicto) : !mem_listo;
 ```
 
-### D5. Reemplazo de L2: pendiente (Iteración 4)
+### D5. Reemplazo de L2: LRU exacto con edades
 
-La L2 es de 4 vías, así que el bit de D3 no sirve. Opciones: LRU verdadero con edades de 2 bits por vía (1024 bits en total) o pseudo-LRU de árbol (384 bits). Se presentará al grupo con su justificación antes de implementarla, igual que D1 a D4.
+**Alternativas:** LRU exacto con edades de 2 bits por vía (8 bits por conjunto, 1024 en total), pseudo-LRU de árbol (3 bits por conjunto, 384 en total) o aleatorio.
 
-### D6. Inclusión: NINE (Non-Inclusive, Non-Exclusive)
+**Razón.** Con cuatro vías el bit único de D3 ya no alcanza, pero el ahorro del pseudo-LRU son 640 bits, el 0,45 % del estado de la L2 (datos y etiquetas suman unos 142 000 bits). A esa escala el costo no decide. Lo que decide es la validación: la metodología del proyecto se apoya en **predecir a mano el número exacto de aciertos**, y con pseudo-LRU ese número deja de ser calculable.
 
-El enunciado pide justificarla explícitamente, dado que el proyecto no tiene coherencia multinúcleo. Tres argumentos:
+**Cómo está hecho.** `l2_cache.sv` guarda una edad de `log2(WAYS)` bits por vía, con inicialización escalonada: las edades de un conjunto son siempre una permutación de 0 a 3, así que la víctima está siempre bien definida. Al acertar, la vía usada pasa a edad 0 y envejecen solo las que eran más jóvenes que ella.
 
-**1. La propiedad que garantiza no tiene consumidor.** La inclusión existe para que un agente externo pueda preguntarle solo a la L2 si un dato está cacheado en alguna parte. Eso es lo útil en un multinúcleo: el snooping consulta el nivel compartido sin molestar a las L1 privadas. CERBERO-1 tiene un núcleo y ningún otro agente que acceda a memoria, así que esa pregunta no se hace nunca.
+**Comprobación.** `tb_l2_cache.sv` caso [7] fija el orden de expulsión, y `patron_reuso.s` lo confirma desde un programa: 256 aciertos de L2 exactos en la segunda pasada, el número que se calcula sin simular (ver [analisis-rendimiento.md](analisis-rendimiento.md) §11).
 
-**2. Lo que costaría.** Mantenerla obliga a **invalidación hacia atrás**: cuando L2 expulsa una línea tiene que avisarle a L1, porque si no L1 quedaría con una copia de algo que L2 ya no tiene. Eso es un camino de invalidación de L2 hacia L1, un puerto más en los arreglos de etiquetas de L1 para atenderlo, y una decisión de qué hacer si esa invalidación llega en el mismo ciclo en que L1 sirve un acierto a esa línea. Lógica nueva con carreras propias, al servicio de una garantía que nadie usa.
+### D6. Inclusión: inclusiva, con invalidación hacia atrás
 
-**3. Lo que NINE no rompe.** La duda legítima es la corrección: ¿puede leerse una versión vieja? No, y la razón es D1. Como **L1 es write-through, L1 nunca tiene una línea sucia**, así que toda copia en L1 es idéntica a la de abajo o no existe:
+**Alternativas:** inclusiva, NINE (Non-Inclusive, Non-Exclusive) o exclusiva.
 
-- Si L2 expulsa una línea que L1 tiene, la copia de L1 sigue siendo válida: no hay nada más nuevo en ningún lado.
-- Si L1 expulsa una línea, no hay nada que escribir hacia abajo.
-- El único dato en vuelo vive en el write buffer, y eso lo resuelve D4 con el stall.
+**Historia de la decisión.** Hasta la Iteración 3 la política acordada era NINE, y el profesor recomendó no usar inclusiva porque complica más. La Iteración 4 se implementó inclusiva, y para la Iteración 5 el grupo decidió quedarse con ella en vez de volver atrás. Esta sección explica por qué, y qué dice la medición sobre lo que cuesta.
 
-En una línea: **write-through es lo que hace seguro a NINE, y NINE es lo que le quita a write-through su desventaja de complicar la inclusión.** Las dos decisiones se sostienen mutuamente, y por eso se tomaron juntas. El profesor recomendó no usar inclusiva porque complica más; esta es la razón de por qué aquí además no aporta nada.
+**1. Lo que cuesta implementarla aquí es poco, gracias a D1.** La inclusión obliga a que cuando L2 expulsa una línea, L1 la suelte también. En general eso exige recoger el dato si la copia de L1 está sucia. Aquí L1 es write-through y nunca tiene una línea sucia, así que invalidar es solo **apagar el bit de válido**:
+
+```systemverilog
+if (inv_req) begin
+    if (inv_hit_v0) valido[0][inv_conjunto] <= 1'b0;
+    if (inv_hit_v1) valido[1][inv_conjunto] <= 1'b0;
+end
+```
+
+El único caso delicado es que la invalidación llegue en el mismo ciclo en que L1 termina de rellenar esa misma línea. Ahí gana la invalidación, porque L2 ya no la tiene. `tb_l1_dcache.sv` caso [INV] prueba que la línea invalidada deja de acertar y que invalidar otra línea no toca esta. El caso del mismo ciclo está resuelto en `l1_dcache.sv` pero no tiene prueba propia (ver §6).
+
+**2. Lo que se gana es una propiedad comprobable.** Con inclusión, toda línea de L1 está también en L2. Eso no tiene consumidor en un sistema de un núcleo (no hay snooping que la aproveche), pero es un invariante que el testbench puede verificar, y obliga a implementar y probar el mecanismo de coherencia entre niveles que el enunciado pide contar (§5.2: invalidaciones hacia atrás ejecutadas). Con NINE ese contador sería siempre cero por construcción, y la métrica que el enunciado pide no mediría nada.
+
+**3. Lo que cuesta en rendimiento, medido.** El contador de invalidaciones ejecutadas sobre L1-D se corrió en las 10 configuraciones con L2 del barrido:
+
+| L2 / L1 | Configuraciones | Invalidaciones |
+|---|---|---|
+| 4× o más | base (16 KB / 4 KB), L2 de 32 y 64 KB, L1 de 512 B a 2 KB | **0** en los 14 programas |
+| 2× | L2 de 8 KB; L1 de 8 KB | 0, y 2 en `patron_aleatorio` con L1 de 8 KB |
+| 1× | L2 de 4 KB; L1 de 16 KB | hasta 897 (`patron_stride`) |
+
+**Con la geometría del enunciado, la inclusión no cuesta nada medible**: la L2 tiene cuatro veces las líneas de L1 y casi nunca expulsa algo que L1 todavía tenga. El costo aparece solo cuando L1 se acerca al tamaño de L2. Con L2 de 4 KB, `patron_aleatorio` pierde 20 aciertos de L1 (de 132 a 112) por líneas que la L2 le obligó a soltar.
+
+La medición también muestra la consecuencia estructural de la inclusión: **la capacidad útil de la jerarquía es la de L2, no la suma**. En `patron_aleatorio`, agrandar L1 de 4 a 16 KB con L2 de 16 KB mueve aciertos de L2 a L1 (aciertos L1 + L2: 359, 356, 357) sin bajar los fallos de L2 (665 a 667). Con NINE la jerarquía podría guardar algo más; con esta relación de tamaños, la diferencia no se vería.
+
+**Por qué no se volvió a NINE.** El argumento de NINE era que la inclusión complica y no aporta. Lo primero resultó cierto una vez: la invalidación vino rota en la Iteración 4 (comparaba una etiqueta reconstruida con bits fuera de rango y no invalidaba nunca) y su prueba no lo detectaba. Ya está arreglada y la prueba ahora comprueba el efecto. Con el mecanismo funcionando y su costo medido en cero para la geometría del proyecto, volver a NINE era borrar lógica probada sin ganar ningún ciclo.
 
 ---
 
@@ -162,7 +187,11 @@ Los dos son instancias del mismo módulo, `eviction_buffer.sv`, porque hacen el 
 
 Lo que de verdad baja la presión no es la profundidad sino la **fusión**: varios stores a la misma línea ocupan una sola entrada, así que un recorrido con localidad espacial mete 8 stores en una entrada. La medición lo confirma: 10 de 11 programas pierden cero ciclos, y el único que sufre es el que escribe 128 líneas distintas seguidas, patrón que ninguna profundidad salva.
 
-**Por qué 8 abajo (la mitad del rango).** La L2 es write-back, así que solo genera tráfico cuando **expulsa** una línea sucia, no en cada escritura; con 16 KB y 4 vías las expulsiones son esporádicas frente al flujo de stores, y 16 entradas serían estado sin uso. Queda **sujeto a revisión en la Iteración 4**, cuando se pueda medir en vez de razonar; el contador para verlo ya está puesto.
+**Por qué 8 abajo (la mitad del rango).** La L2 es write-back, así que solo genera tráfico cuando **expulsa** una línea sucia, no en cada escritura; con 16 KB y 4 vías las expulsiones son esporádicas frente al flujo de stores, y 16 entradas serían estado sin uso.
+
+**Medido en la Iteración 5.** El contador `stall_por_evict` cuenta los ciclos en que la L2 quiere expulsar y el eviction buffer está lleno. En las 140 corridas del barrido con L2 (10 configuraciones × 14 programas) marca **0**. La L2 absorbe los stores: `recorrido_cache.s`, que escribe 128 líneas distintas, se las queda sucias en la L2 y no expulsa ninguna antes del final.
+
+La contraprueba sale de la configuración sin L2, donde cada store baja directo al eviction buffer: ahí el mismo programa pierde **5959 ciclos** con el buffer lleno. El buffer de 8 no es el que alcanza por suerte; es la L2 write-back la que le quita la presión, que es justo el argumento del párrafo anterior. Bajarlo a 4 probablemente tampoco costaría ciclos, pero no se midió con 4, así que se queda en 8, dentro del rango del enunciado.
 
 **La fusión y su carrera.** El controlador copia la línea al empezar a drenarla, así que un store que se fusione después dentro de esa entrada se pierde 53 ciclos más tarde, en silencio. La ventana peligrosa empieza en el ciclo en que el controlador **decide** drenar, cuando todavía está en `LIBRE`:
 
@@ -233,19 +262,22 @@ assign mem_drenada = halted && !id_valid && !ex_valid && !mem_valid
 | Mecanismo para el riesgo RAW | implementado (stall) |
 | Stalls por fallos | implementado, con desglose por causa |
 | Memoria principal realista | implementado, 53 ciclos medidos contra el RTL |
-| Contadores de métricas | implementados, 21 contadores |
-| **Caché L2 unificada** | **Iteración 4** |
-| Coherencia / inclusión | política decidida (NINE, D6); se implementa con la L2 |
-| Reemplazo de L2 | decisión pendiente (D5) |
+| Contadores de métricas | implementados, 31 contadores (incluye stall por acierto y por fallo de L2) |
+| Caché L2 unificada | implementada, 16 KB, 4 vías, write-back, write-allocate |
+| Coherencia / inclusión | inclusiva con invalidación hacia atrás (D6), con contador |
+| Reemplazo de L2 | LRU exacto con edades (D5) |
+| Línea base sin L2 | `-DCERBERO_SIN_L2`, mismo RTL |
 
-1. **La geometría de L1 es parametrizable en capacidad, no en asociatividad.** `l1_dcache.sv` implementa exactamente dos vías; pedirle otra aborta la elaboración con un mensaje explícito, en vez de simular algo incorrecto. La generalización a N vías llega con la L2 de 4 vías. Por eso el barrido varía capacidad de 512 B a 16 KB a asociatividad fija.
-2. **El eviction buffer está dimensionado por razonamiento, no por medición**, porque la L2 que lo alimentará no existe. Se revisa en la Iteración 4.
-3. **No hay L1 de instrucciones**, así que las métricas de caché cubren solo accesos a datos.
+1. **La L1 es parametrizable en capacidad, no en asociatividad.** `l1_dcache.sv` implementa exactamente dos vías (compara dos etiquetas y guarda el LRU como un bit). ⚠️ No tiene guardia: compilarla con `L1D_WAYS` distinto de 2 no aborta, sino que **se cuelga** leyendo `x` de una vía que no existe. La L2 sí es de N vías y sí tiene guardias (`l2_cache.sv` exige potencias de dos, `top.sv` exige `L2_BYTES = L2_SETS × L2_WAYS × 32`). Por eso el barrido varía la capacidad de L1 a 2 vías fijas.
+2. **El caso de invalidación en el mismo ciclo que el relleno** está resuelto en `l1_dcache.sv` (gana la invalidación) pero no tiene prueba propia.
+3. **No hay L1 de instrucciones**, así que las métricas de caché cubren solo accesos a datos. La L2 es unificada en estructura pero solo recibe tráfico de datos.
 
 ```bash
 cd src/build
-make clean && make all     # 35 unidades
-make l1_dcache             # la caché: 50 casos
+make clean && make all     # todas las unidades
+make l1_dcache             # la L1, incluido el caso [INV]
+make l2_cache              # la L2 y su LRU por edades
 make mem_system            # T_mem contra el RTL
-make ejemplos              # 41 casos, contadores contra aritmética
+make patrones              # los cuatro patrones, con oráculo exacto
+make analisis              # el barrido de la jerarquía, tablas y gráficos
 ```
