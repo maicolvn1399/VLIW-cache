@@ -762,6 +762,11 @@ module top #(
   // tiempo.
   logic l2_vaciar, l2_tiene_sucias;
 
+  // mem_valid es de la frontera EX/MEM, mas abajo, pero se lee aqui: el
+  // estandar exige declarar una senal antes de su primer uso, e Icarus 13 lo
+  // hace cumplir.
+  logic             mem_valid;
+
   assign l2_vaciar = halted && !id_valid && !ex_valid && !mem_valid
                   && !cache_stall && wb_vacio;
 
@@ -959,8 +964,7 @@ module top #(
   logic [1:0] ex_addr_lo;
   assign ex_addr_lo = lsu_eff_addr[1:0];
 
-  // Frontera EX/MEM
-  logic             mem_valid;
+  // Frontera EX/MEM (mem_valid se declara arriba, junto al vaciado de la L2)
   logic [31:0]      mem_s2;
   logic [1:0]       mem_addr_lo;
   logic [`NWRITE_PORTS-1:0]                mem_wen;
@@ -1116,7 +1120,7 @@ module top #(
       .stall_por_evict(perf_stall_evict),
       .inv_ejecutadas (perf_inv_ejecutadas),
       .mem_accesos    (perf_mem_accesos),
-      .mem_ciclos     (perf_mem_ciclos), // <--- NUEVO [L2-04]: Salida hacia el testbench
+      .mem_ciclos     (perf_mem_ciclos),
       .l2_load_hit    (perf_l2_load_hit),   // <--- NUEVO [L2-05]
       .l2_load_miss   (perf_l2_load_miss),  // <--- NUEVO [L2-05]
       .l2_store_hit   (perf_l2_store_hit),  // <--- NUEVO [L2-05]
