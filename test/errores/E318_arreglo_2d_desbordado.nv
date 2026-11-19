@@ -1,0 +1,4 @@
+functio principale() -> integer {
+    varia matriz : integer[65535][65535];
+    redde 0;
+}

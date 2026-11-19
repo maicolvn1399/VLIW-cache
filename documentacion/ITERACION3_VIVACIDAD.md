@@ -11,11 +11,20 @@ las otras dos:
 
 | | Estado |
 |---|---|
-| **Análisis de vivacidad** (requisito previo de todo lo demás) | hecho |
-| **Eliminación de código muerto** | hecho |
-| Reordenamiento de instrucciones | pendiente |
-| Loop unrolling | pendiente |
-| Spilling register | pendiente |
+| **Análisis de vivacidad** (requisito previo de todo lo demás) | hecho — aquí |
+| **Eliminación de código muerto** | hecho — aquí |
+| Reordenamiento de instrucciones | hecho después, ver nota |
+| Loop unrolling | hecho después, ver nota |
+| Spilling register | hecho después, ver nota |
+
+> **Nota de estado.** Este documento se escribió cuando las otras tres
+> optimizaciones de la Iteración 3 estaban pendientes, y describe solo lo que
+> se entregó en ese momento. Las tres **ya están implementadas**:
+> `fase6_optimizacion/desenrollado.c` (loop unrolling), el reordenamiento y la
+> asignación de registros con derrame (linear scan) en `fase4_codigo/codegen.c`,
+> todas bajo `-O2`. Lo que ganan está medido en
+> [EVIDENCIA_OPTIMIZACION.md](EVIDENCIA_OPTIMIZACION.md) y su efecto sobre la
+> jerarquía de memoria en [ITERACION5_NIVELES.md](ITERACION5_NIVELES.md).
 
 El profesor lo planteó así: *«vamos a tener que hacer y manipular los recorridos
 de los grafos para poder calcular y ver si una variable está viva, y si no está

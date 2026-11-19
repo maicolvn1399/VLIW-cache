@@ -545,6 +545,15 @@ int viv_viva_a_la_salida(const VivacidadFuncion *vf, int b, const char *nombre) 
     return bit_puesto(&vf->vivo_sal[(size_t)b * vf->n_palabras], idx);
 }
 
+int viv_viva_a_la_entrada(const VivacidadFuncion *vf, int b, const char *nombre) {
+    int idx;
+    if (vf == NULL || vf->vivo_ent == NULL) return 1;
+    if (b < 0 || b >= vf->fn->n_bloques) return 1;
+    idx = viv_indice(vf, nombre);
+    if (idx < 0) return 1;
+    return bit_puesto(&vf->vivo_ent[(size_t)b * vf->n_palabras], idx);
+}
+
 /* ------------------------------------------------------------- listado */
 
 static void imprimir_conjunto(FILE *out, const VivacidadFuncion *vf,
@@ -552,7 +561,8 @@ static void imprimir_conjunto(FILE *out, const VivacidadFuncion *vf,
     int n, primero = 1;
     for (n = 0; n < vf->n_nombres; n++) {
         if (!bit_puesto(c, n)) continue;
-        fprintf(out, "%s%s", primero ? "" : ", ", vf->nombres[n]);
+        fprintf(out, "%s%s", primero ? "" : ", ",
+                tac_nombre_fuente(vf->nombres[n]));
         primero = 0;
     }
     if (primero) fprintf(out, "-");
@@ -581,7 +591,8 @@ void viv_imprimir(FILE *out, const Vivacidad *v) {
         if (escapados > 0) {
             fprintf(out, "  escapan por & (nunca se dan por muertos): ");
             for (n = 0; n < vf->n_nombres; n++)
-                if (vf->escapa[n]) fprintf(out, "%s ", vf->nombres[n]);
+                if (vf->escapa[n])
+                    fprintf(out, "%s ", tac_nombre_fuente(vf->nombres[n]));
             fprintf(out, "\n");
         }
 

@@ -1,0 +1,11 @@
+functio escalar(valor : integer) -> integer {
+    redde valor * 8;
+}
+
+functio principale() -> integer {
+    varia base : integer = 4;
+    varia copia : integer = base;
+    varia suma : integer = copia + 3;
+    varia total : integer = suma * 2;
+    redde escalar(total);
+}

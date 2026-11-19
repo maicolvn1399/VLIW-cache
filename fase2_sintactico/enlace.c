@@ -332,7 +332,7 @@ static char *qualified_name(const char *key, const char *name) {
     size_t n = strlen(key) + strlen(name) + 2;
     char *r = malloc(n);
     if (r == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
-    snprintf(r, n, "%s$%s", key, name);
+    snprintf(r, n, "%s_%s", key, name);
     return r;
 }
 

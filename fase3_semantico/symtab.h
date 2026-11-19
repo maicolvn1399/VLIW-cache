@@ -62,6 +62,7 @@ typedef struct Parameter {
 
 typedef struct Symbol {
     char *name;
+    uint64_t id;
     SymbolKind kind;
     DataType type;
 
@@ -110,6 +111,9 @@ struct Entrada;
 typedef struct Scope {
     int level;               /* 0 global, 1+ anidados */
     Symbol *symbols;
+    Symbol **hash_buckets;   /* busqueda por nombre; symbols conserva el orden */
+    size_t hash_capacity;
+    size_t hash_count;
     int offset_guardado;     /* local_memory_offset al abrir, para reciclarlo */
     struct Scope *parent;
 } Scope;
@@ -118,6 +122,7 @@ typedef struct Scope {
  * imprimir la tabla completa con --sym al final de la compilacion. */
 typedef struct Entrada {
     char *name;
+    uint64_t id;
     char *ambito;
     int level;
     SymbolKind kind;
@@ -151,9 +156,13 @@ typedef struct Entrada {
 
 typedef struct SymbolTable {
     Scope *current_scope;
+    uint64_t next_symbol_id;
     int global_memory_offset;  /* siguiente direccion libre de DMEM */
     int local_memory_offset;   /* bytes usados por el ambito activo */
     int max_local_offset;      /* marca de agua del marco de la funcion */
+    bool frame_overflowed;
+    int frame_overflow_line;
+    int frame_overflow_col;
     bool globales_desbordadas;
 
     const char *ambito_actual; /* nombre de funcion, para el listado */
@@ -191,8 +200,7 @@ void symtab_add_param(Symbol *f, const char *name, DataType type,
 
 /* Fija el tamano del marco de una funcion y lo refleja en el listado. */
 void symtab_set_frame_size(Symbol *f, int bytes);
-void symtab_set_frame_offset(SymbolTable *st, const char *function,
-                             const char *name, int offset);
+void symtab_set_frame_offset(SymbolTable *st, uint64_t symbol_id, int offset);
 void symtab_set_function_address(SymbolTable *st, const char *function,
                                 uint32_t address);
 
@@ -209,8 +217,8 @@ void symtab_set_function_address(SymbolTable *st, const char *function,
  * las locales, los temporales y el R15 guardado. */
 void symtab_set_frame_total(SymbolTable *st, const char *function, int bytes);
 
-void symtab_set_data_address(SymbolTable *st, const char *function,
-                             const char *name, uint32_t address);
+void symtab_set_data_address(SymbolTable *st, uint64_t symbol_id,
+                             uint32_t address);
 
 /* --- Marco de la funcion activa --- */
 void symtab_reset_frame(SymbolTable *st);

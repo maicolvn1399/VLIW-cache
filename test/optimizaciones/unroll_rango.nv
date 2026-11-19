@@ -1,0 +1,15 @@
+functio obtener_limite() -> integer {
+    redde 4;
+}
+
+functio principale() -> integer {
+    varia valores : integer[3] = {10, 20, 30};
+    varia limite : integer = obtener_limite();
+    varia i : integer = 0;
+    varia suma : integer = 0;
+    dum (i < limite) {
+        suma += valores[i];
+        i += 1;
+    }
+    redde suma;
+}

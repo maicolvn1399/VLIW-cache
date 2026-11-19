@@ -1,0 +1,7 @@
+functio principale() -> integer {
+    varia suma : integer = 0;
+    per (varia i : integer = 0; i < 5; i += 1) {
+        suma += i;
+    }
+    redde suma;
+}

@@ -1,0 +1,15 @@
+functio informar(valor : integer) -> integer {
+    varia calculo_muerto : integer = valor * 3;
+    scribe(valor);
+    redde valor + 1;
+}
+
+functio principale() -> integer {
+    varia resultado_ignorado : integer = informar(5);
+    varia ciclo_muerto : integer = 0;
+    per (varia i : integer = 0; i < 3; i += 1) {
+        ciclo_muerto = ciclo_muerto + i;
+    }
+    scribe(7);
+    redde 0;
+}

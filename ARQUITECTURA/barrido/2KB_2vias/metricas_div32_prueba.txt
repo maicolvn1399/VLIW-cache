@@ -41,6 +41,14 @@
       escrituras: aciertos                4
       escrituras: fallos                  2
     tasa de aciertos                 50.00%
+    invalidaciones hacia atras            0  (ejecutadas sobre L1-D)
+
+  memoria principal
+    accesos (lineas completas)            6
+    ciclos en transferencias            312
+    ciclos por acceso                  52.0  (T_mem = 53)
+    utilizacion del bus               6.54%  (del reset al drenado completo)
+      ventana medida                   4774 ciclos  (4272 del programa + 502 de drenado)
     ok     suma de causas = stalls 134
     ok     accesos L1 = loads + stores 24
 

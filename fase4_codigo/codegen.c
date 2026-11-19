@@ -6,11 +6,11 @@
  * condicion, la convencion de registros y las dos reglas temporales.
  *
  *   Registros (convencion acordada con CE 4301)
- *     R0, R1   par criptografico P0 (L y R de Feistel4)
- *     R2 - R5  pares P1 y P2, sin uso en esta version
+ *     R0, R1   scratch reservados, tambien usados por el par Feistel P0
+ *     R2 - R5  registros asignables; clobbered por division y Feistel
  *     R6 - R9  argumentos 1 a 4; R6 lleva tambien el valor de retorno
- *     R10, R11 temporales del generador
- *     R12, R13 punteros, reservados por el llamado
+ *     R10, R11 registros asignables
+ *     R12, R13 reservados para punteros y temporales del backend
  *     R14      puntero de pila, crece hacia abajo desde 0xFFFC
  *     R15      registro de enlace, lo escribe JAL
  *
@@ -24,7 +24,7 @@
  *   Marco de pila, de la direccion que apunta R14 hacia arriba
  *     [ 0                 .. 4k-4   ]  argumentos salientes a partir del 5
  *     [ 4k                .. +L-4   ]  parametros y locales (los ubico la fase 3)
- *     [ 4k+L              .. +4T-4  ]  temporales del TAC
+ *     [ 4k+L              .. +4T-4  ]  temporales derramados del TAC
  *     [ total-4                     ]  R15 guardado, si la funcion llama
  *
  *   Como R14 no se mueve dentro del cuerpo, todos los desplazamientos son
@@ -36,8 +36,10 @@
 #include <stdarg.h>
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #include "codegen.h"
 #include "diag.h"
+#include "vivacidad.h"
 
 /* --- Mapa que reserva el compilador dentro del segmento de globales ----
  * 0x0000-0x1FFF  variables globales (Nova no tiene globales mutables)
@@ -62,8 +64,9 @@
 
 #define R_ARG0   6     /* R6 */
 #define R_RET    6
-#define RA      10     /* temporal A */
-#define RB      11     /* temporal B */
+#define R_PTR    12    /* scratch reservado para punteros que cruzan CRP */
+#define RA      0      /* scratch; no forma parte del pool asignable */
+#define RB      1      /* scratch; no forma parte del pool asignable */
 #define R_SP    14
 #define R_LINK  15
 
@@ -88,7 +91,14 @@
  * de etiquetas, y despues hay dos emisores sobre la misma lista, el de texto
  * y el binario. Asi no pueden divergir.
  */
-typedef struct { char *s[5]; int source_line, source_col; } Bundle;
+typedef struct {
+    char *s[5];
+    int source_line, source_col;
+    unsigned int lecturas[5], escrituras[5];
+    unsigned char planificable[5], escribe_flags[5];
+    unsigned char delay_seguro[5];
+    char razon_nop[5][112];
+} Bundle;
 typedef struct { char *nombre; int bundle; int orden; } Etiq;
 typedef struct { char *nombre; int direccion; } EtiqDato;
 
@@ -121,6 +131,13 @@ static FILE *sal = NULL;
 static long ciclo = 0;
 static long listo[16];
 static long listo_flags = 0;
+static char *paquete_pendiente[5];
+static unsigned int paquete_lecturas = 0;
+static unsigned int paquete_escrituras = 0;
+static unsigned int paquete_lecturas_slot[5];
+static unsigned int paquete_escrituras_slot[5];
+static unsigned char paquete_planificable[5];
+static unsigned char paquete_escribe_flags[5];
 static bool hubo_error = false;
 static int linea_fuente_actual = 0, columna_fuente_actual = 0;
 
@@ -135,13 +152,46 @@ static bool f_es_principale = false;
 static bool etiqueta_cuerpo_emitida = false;
 
 /* Temporales de la funcion, para asignarles una posicion en el marco */
-#define MAX_TEMPS 512
-static char *temps[MAX_TEMPS];
+#define MAX_FUNCS 256
+static char **temps;
 static int n_temps = 0;
-static int temp_primero[MAX_TEMPS];
-static int temp_ultimo[MAX_TEMPS];
-static int temp_slot[MAX_TEMPS];
+static size_t cap_temps = 0;
+static int *temp_primero;
+static int *temp_ultimo;
+static int *temp_def_pos;
+static int *temp_slot;
+static int *temp_reg;
+static bool *temp_tiene_constante;
+static int *temp_valor_constante;
+static bool *temp_solo_indice_fijo;
+static size_t *tabla_temps;
+static size_t cap_tabla_temps = 0;
 static int n_temp_slots = 0;
+static bool asignacion_habilitada = true;
+static bool medicion_referencia = false;
+static bool ejecutable_requiere_imem = false;
+static int instrucciones_reordenadas;
+static int temporales_asignados_registro;
+static int renombradas;
+static int temporales_derramados;
+static int dependencias_war;
+static int dependencias_waw;
+static int cargas_temporales_emitidas = 0;
+static int stores_temporales_emitidos = 0;
+
+typedef struct {
+    const char *funcion;
+    int cargas;
+    int stores;
+} AccesosTemporales;
+
+static AccesosTemporales accesos_base[MAX_FUNCS];
+static AccesosTemporales accesos_asignados[MAX_FUNCS];
+static int n_accesos_base = 0;
+static int n_accesos_asignados = 0;
+static GrafoFlujo *asig_cfg = NULL;
+static Vivacidad *asig_viv = NULL;
+static FILE *asig_salida = NULL;
 
 static TACList *lista = NULL;
 
@@ -181,6 +231,8 @@ static int n_sitios = 0, cap_sitios = 0;
  */
 static int cache_reg = -1;
 static const char *cache_nombre = NULL;
+static int tac_posicion_actual = 0;
+static TACInst *tac_actual = NULL;
 
 static void cache_limpiar(void) {
     cache_reg = -1;
@@ -225,11 +277,51 @@ static void bundle(const char *s0, const char *s1, const char *s2,
         if (prog == NULL) { fprintf(stderr, "novac: sin memoria\n"); exit(3); }
     }
     Bundle *b = &prog[n_bundles++];
+    memset(b, 0, sizeof(*b));
     b->source_line = linea_fuente_actual;
     b->source_col  = columna_fuente_actual;
     b->s[0] = dup_o_nulo(s0); b->s[1] = dup_o_nulo(s1);
     b->s[2] = dup_o_nulo(s2); b->s[3] = dup_o_nulo(s3);
     b->s[4] = dup_o_nulo(s4);
+}
+
+static unsigned int mascara_registro(int registro) {
+    return registro >= 0 && registro < 16
+        ? 1u << (unsigned int)registro
+        : 0u;
+}
+
+static void paquete_descartar(void) {
+    for (int s = 0; s < 5; s++) {
+        free(paquete_pendiente[s]);
+        paquete_pendiente[s] = NULL;
+        paquete_lecturas_slot[s] = 0;
+        paquete_escrituras_slot[s] = 0;
+        paquete_planificable[s] = 0;
+        paquete_escribe_flags[s] = 0;
+    }
+    paquete_lecturas = 0;
+    paquete_escrituras = 0;
+}
+
+static void paquete_vaciar(void) {
+    bool hay_instrucciones = false;
+    for (int s = 0; s < 5; s++)
+        if (paquete_pendiente[s] != NULL) hay_instrucciones = true;
+    if (!hay_instrucciones) return;
+
+    bundle(paquete_pendiente[0], paquete_pendiente[1],
+           paquete_pendiente[2], paquete_pendiente[3],
+           paquete_pendiente[4]);
+    Bundle *b = &prog[n_bundles - 1];
+    for (int s = 0; s < 5; s++) {
+        b->lecturas[s] = paquete_lecturas_slot[s];
+        b->escrituras[s] = paquete_escrituras_slot[s];
+        b->planificable[s] = paquete_planificable[s];
+        b->escribe_flags[s] = paquete_escribe_flags[s];
+    }
+    paquete_descartar();
+    ciclo++;
 }
 
 static void registrar_etiqueta(const char *nombre) {
@@ -317,10 +409,24 @@ static CodegenEstadisticas estad_copia;
 static void guardar_estadisticas(void) {
     memset(&estad_copia, 0, sizeof(estad_copia));
     estad_copia.bundles = n_bundles;
+    estad_copia.instrucciones_reordenadas = instrucciones_reordenadas;
+    estad_copia.temporales_asignados_registro =
+        temporales_asignados_registro;
+    estad_copia.renombradas = renombradas;
+    estad_copia.temporales_derramados = temporales_derramados;
+    estad_copia.dependencias_war = dependencias_war;
+    estad_copia.dependencias_waw = dependencias_waw;
     for (int b = 0; b < n_bundles; b++) {
         int usados = 0;
-        for (int s = 0; s < 5; s++)
-            if (prog[b].s[s] != NULL) usados++;
+        for (int s = 0; s < 5; s++) {
+            if (prog[b].s[s] != NULL) {
+                usados++;
+            } else if (strstr(prog[b].razon_nop[s], "dependencia WAR") != NULL) {
+                estad_copia.nops_war++;
+            } else if (strstr(prog[b].razon_nop[s], "dependencia WAW") != NULL) {
+                estad_copia.nops_waw++;
+            }
+        }
         estad_copia.slots_usados += usados;
         if (usados == 0) estad_copia.bundles_vacios++;
     }
@@ -347,6 +453,7 @@ static void vacio(void) { bundle(NULL, NULL, NULL, NULL, NULL); }
 
 /* Rellena con bundles vacios hasta alcanzar el ciclo pedido. */
 static void hasta(long c) {
+    if (ciclo < c) paquete_vaciar();
     while (ciclo < c) { vacio(); ciclo++; }
 }
 
@@ -361,19 +468,30 @@ static void emitir(int slot, const char *texto, int rd, int u1, int u2) {
     if (u2 >= 0 && listo[u2] > req) req = listo[u2];
     hasta(req);
 
-    const char *c[5] = {NULL, NULL, NULL, NULL, NULL};
-    c[slot] = texto;
-    bundle(c[0], c[1], c[2], c[3], c[4]);
+    unsigned int lecturas = mascara_registro(u1) | mascara_registro(u2);
+    unsigned int escrituras = mascara_registro(rd);
+    if (paquete_pendiente[slot] != NULL ||
+        (escrituras & (paquete_lecturas | paquete_escrituras)) != 0 ||
+        (lecturas & paquete_escrituras) != 0) {
+        paquete_vaciar();
+    }
+
+    paquete_pendiente[slot] = dup_o_nulo(texto);
+    paquete_lecturas |= lecturas;
+    paquete_escrituras |= escrituras;
+    paquete_lecturas_slot[slot] = lecturas;
+    paquete_escrituras_slot[slot] = escrituras;
+    paquete_planificable[slot] = 1;
     if (rd >= 0) {
         listo[rd] = ciclo + 3;
         if (rd == cache_reg) cache_limpiar();
     }
-    ciclo++;
 }
 
 /* Espera a que no quede nada en vuelo. Se usa antes de cada salto y de cada
  * etiqueta, para que ningun valor a medio camino cruce un borde del flujo. */
 static void barrera(void) {
+    paquete_vaciar();
     long m = ciclo;
     for (int i = 0; i < 16; i++) if (listo[i] > m) m = listo[i];
     if (listo_flags > m) m = listo_flags;
@@ -433,9 +551,7 @@ static void salto(const char *texto, int usa_reg) {
         /* Forma larga: la direccion de la etiqueta a un registro, y tipo J. */
         char t[96];
         snprintf(t, sizeof(t), "movi r%d, #&%s", RB, etq);
-        bundle(t, NULL, NULL, NULL, NULL);
-        ciclo++;
-        listo[RB] = ciclo + 2;
+        emitir(S_ALU0, t, RB, -1, -1);
         barrera();                  /* paga la latencia antes de usar r11 */
         snprintf(largo, sizeof(largo), "%s r%d", es_jal ? "jalr.al" : "jr.al", RB);
         texto = largo;
@@ -452,24 +568,17 @@ static void salto(const char *texto, int usa_reg) {
 static void cmp_reg(int a, int b) {
     char t[48];
     snprintf(t, sizeof(t), "cmp r%d, r%d", a, b);
-    long req = ciclo;
-    if (listo[a] > req) req = listo[a];
-    if (listo[b] > req) req = listo[b];
-    hasta(req);
-    bundle(t, NULL, NULL, NULL, NULL);
-    ciclo++;
-    listo_flags = ciclo + 2;
+    emitir(S_ALU0, t, -1, a, b);
+    paquete_escribe_flags[S_ALU0] = 1;
+    listo_flags = ciclo + 3;
 }
 
 static void cmp_inm(int a, long v) {
     char t[48];
     snprintf(t, sizeof(t), "cmpi r%d, #%ld", a, v);
-    long req = ciclo;
-    if (listo[a] > req) req = listo[a];
-    hasta(req);
-    bundle(t, NULL, NULL, NULL, NULL);
-    ciclo++;
-    listo_flags = ciclo + 2;
+    emitir(S_ALU0, t, -1, a, -1);
+    paquete_escribe_flags[S_ALU0] = 1;
+    listo_flags = ciclo + 3;
 }
 
 /* Operaciones de uso frecuente, con su dependencia ya declarada. */
@@ -550,18 +659,125 @@ static void mover(int rd, int rs);
 
 /* --- Resolucion de operandos ------------------------------------------ */
 
-static int indice_temp(const char *nombre) {
-    for (int i = 0; i < n_temps; i++)
-        if (strcmp(temps[i], nombre) == 0) return i;
-    if (n_temps < MAX_TEMPS) {
-        int indice = n_temps++;
-        temps[indice] = (char *)nombre;
-        temp_primero[indice] = INT_MAX;
-        temp_ultimo[indice] = -1;
-        temp_slot[indice] = -1;
-        return indice;
+static void error_memoria_temporales(void) {
+    fprintf(stderr, "novac: sin memoria\n");
+    exit(3);
+}
+
+static void *reallocar_temporales(void *memoria, size_t bytes) {
+    void *nuevo = realloc(memoria, bytes);
+    if (nuevo == NULL) error_memoria_temporales();
+    return nuevo;
+}
+
+static uint64_t hash_nombre_temp(const char *nombre) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (const unsigned char *p = (const unsigned char *)nombre; *p; p++) {
+        hash ^= *p;
+        hash *= UINT64_C(1099511628211);
     }
-    return 0;
+    return hash;
+}
+
+static void redimensionar_tabla_temps(size_t capacidad) {
+    size_t *nueva = calloc(capacidad, sizeof(*nueva));
+    if (nueva == NULL) error_memoria_temporales();
+
+    for (int i = 0; i < n_temps; i++) {
+        size_t pos = (size_t)hash_nombre_temp(temps[i]) & (capacidad - 1);
+        while (nueva[pos] != 0) pos = (pos + 1) & (capacidad - 1);
+        nueva[pos] = (size_t)i + 1;
+    }
+
+    free(tabla_temps);
+    tabla_temps = nueva;
+    cap_tabla_temps = capacidad;
+}
+
+static void asegurar_tabla_temps(size_t necesarios) {
+    if (cap_tabla_temps == 0) redimensionar_tabla_temps(64);
+    while (necesarios >= cap_tabla_temps - cap_tabla_temps / 4) {
+        if (cap_tabla_temps > SIZE_MAX / 2)
+            error_memoria_temporales();
+        redimensionar_tabla_temps(cap_tabla_temps * 2);
+    }
+}
+
+static void asegurar_capacidad_temps(size_t necesarios) {
+    if (necesarios <= cap_temps) return;
+
+    size_t nueva = cap_temps == 0 ? 64 : cap_temps;
+    while (nueva < necesarios) {
+        if (nueva > (size_t)INT_MAX / 2) {
+            nueva = (size_t)INT_MAX;
+            break;
+        }
+        nueva *= 2;
+    }
+    if (nueva < necesarios ||
+        nueva > SIZE_MAX / sizeof(*temps) ||
+        nueva > SIZE_MAX / sizeof(*temp_primero) ||
+        nueva > SIZE_MAX / sizeof(*temp_tiene_constante))
+        error_memoria_temporales();
+
+    temps = reallocar_temporales(temps, nueva * sizeof(*temps));
+    temp_primero = reallocar_temporales(temp_primero,
+                                        nueva * sizeof(*temp_primero));
+    temp_ultimo = reallocar_temporales(temp_ultimo,
+                                       nueva * sizeof(*temp_ultimo));
+    temp_def_pos = reallocar_temporales(temp_def_pos,
+                                        nueva * sizeof(*temp_def_pos));
+    temp_slot = reallocar_temporales(temp_slot, nueva * sizeof(*temp_slot));
+    temp_reg = reallocar_temporales(temp_reg, nueva * sizeof(*temp_reg));
+    temp_tiene_constante = reallocar_temporales(
+        temp_tiene_constante, nueva * sizeof(*temp_tiene_constante));
+    temp_valor_constante = reallocar_temporales(
+        temp_valor_constante, nueva * sizeof(*temp_valor_constante));
+    temp_solo_indice_fijo = reallocar_temporales(
+        temp_solo_indice_fijo, nueva * sizeof(*temp_solo_indice_fijo));
+    cap_temps = nueva;
+}
+
+static int indice_temp(const char *nombre) {
+    if (nombre == NULL) return -1;
+    asegurar_tabla_temps((size_t)n_temps + 1);
+
+    size_t pos = (size_t)hash_nombre_temp(nombre) & (cap_tabla_temps - 1);
+    while (tabla_temps[pos] != 0) {
+        int indice = (int)(tabla_temps[pos] - 1);
+        if (strcmp(temps[indice], nombre) == 0) return indice;
+        pos = (pos + 1) & (cap_tabla_temps - 1);
+    }
+
+    if (n_temps == INT_MAX) error_memoria_temporales();
+    asegurar_capacidad_temps((size_t)n_temps + 1);
+    asegurar_tabla_temps((size_t)n_temps + 1);
+    pos = (size_t)hash_nombre_temp(nombre) & (cap_tabla_temps - 1);
+    while (tabla_temps[pos] != 0)
+        pos = (pos + 1) & (cap_tabla_temps - 1);
+
+    int indice = n_temps++;
+    temps[indice] = (char *)nombre;
+    temp_primero[indice] = INT_MAX;
+    temp_ultimo[indice] = -1;
+    temp_def_pos[indice] = -1;
+    temp_slot[indice] = -1;
+    temp_reg[indice] = -1;
+    temp_tiene_constante[indice] = false;
+    temp_valor_constante[indice] = 0;
+    temp_solo_indice_fijo[indice] = true;
+    tabla_temps[pos] = (size_t)indice + 1;
+    return indice;
+}
+
+static bool shift_constante_inmediato(const char *nombre, int *valor) {
+    if (nombre == NULL || !tac_es_temporal(nombre)) return false;
+    int t = indice_temp(nombre);
+    if (t < 0 || !temp_tiene_constante[t] ||
+        temp_valor_constante[t] < 0 || temp_valor_constante[t] > 31)
+        return false;
+    if (valor != NULL) *valor = temp_valor_constante[t];
+    return true;
 }
 
 static int desplazamiento_simbolo(const TACSimbolo *simbolo) {
@@ -574,6 +790,7 @@ static int disp_de(const char *nombre) {
     if (nombre == NULL) return -1;
     if (tac_es_temporal(nombre)) {
         int indice = indice_temp(nombre);
+        if (indice < 0) return -1;
         if (temp_slot[indice] < 0) return -1;
         return f_base_tmp + 4 * temp_slot[indice];
     }
@@ -586,8 +803,159 @@ static const TACSimbolo *sim_de(const char *nombre) {
     return tac_buscar_simbolo(lista, func, nombre);
 }
 
+/* Un indice constante y valido en un arreglo local es un desplazamiento fijo
+ * respecto de R14; no hace falta calcular la direccion en tiempo de ejecucion. */
+static bool store_fijo(const TACInst *i, int *desplazamiento) {
+    if (i == NULL || i->op != TAC_STORE || i->result == NULL ||
+        i->arg1 == NULL)
+        return false;
+    const TACSimbolo *s = sim_de(i->result);
+    if (s == NULL || s->es_param || s->dims <= 0) return false;
+    int t = indice_temp(i->arg1);
+    if (t < 0 || !temp_tiene_constante[t]) return false;
+    int indice = temp_valor_constante[t];
+    int elementos = s->size_bytes / 4;
+    if (indice < 0 || indice >= elementos) return false;
+    if (desplazamiento != NULL)
+        *desplazamiento = desplazamiento_simbolo(s) + 4 * indice;
+    return true;
+}
+
+static const VivacidadFuncion *funcion_viva_actual(void) {
+    if (asig_viv == NULL) return NULL;
+    for (int f = 0; f < asig_viv->n_funciones; f++)
+        if (strcmp(asig_viv->funciones[f].fn->nombre, func) == 0)
+            return &asig_viv->funciones[f];
+    return NULL;
+}
+
+static int conjunto_contiene(const unsigned *conjunto, int indice) {
+    return conjunto != NULL &&
+           ((conjunto[indice / 32] >> (indice % 32)) & 1u) != 0;
+}
+
+static int bloque_de_posicion(const VivacidadFuncion *vf, int posicion) {
+    int inicio = 0;
+    for (int b = 0; b < vf->fn->n_bloques; b++) {
+        int fin = inicio + vf->fn->bloques[b].n_inst;
+        if (posicion >= inicio && posicion < fin) return b;
+        inicio = fin;
+    }
+    return -1;
+}
+
+static void asignacion_iniciar(TACList *tac) {
+    if (asig_viv != NULL) viv_liberar(asig_viv);
+    if (asig_cfg != NULL) cfg_liberar(asig_cfg);
+    asig_cfg = cfg_construir(tac);
+    asig_viv = viv_analizar(asig_cfg, tac);
+}
+
+static void asignacion_terminar(void) {
+    viv_liberar(asig_viv);
+    cfg_liberar(asig_cfg);
+    asig_viv = NULL;
+    asig_cfg = NULL;
+}
+
+static void registrar_accesos_temporales(AccesosTemporales *tabla, int *n,
+                                        const char *nombre) {
+    int indice = 0;
+    while (indice < *n && strcmp(tabla[indice].funcion, nombre) != 0)
+        indice++;
+    if (indice == *n) {
+        if (*n >= MAX_FUNCS) return;
+        tabla[indice].funcion = nombre;
+        (*n)++;
+    }
+    tabla[indice].cargas = cargas_temporales_emitidas;
+    tabla[indice].stores = stores_temporales_emitidos;
+}
+
+static const AccesosTemporales *buscar_accesos_temporales(
+    const AccesosTemporales *tabla, int n, const char *nombre) {
+    for (int i = 0; i < n; i++)
+        if (strcmp(tabla[i].funcion, nombre) == 0) return &tabla[i];
+    return NULL;
+}
+
+static unsigned registros_prohibidos_en_intervalo(TACInst *desde,
+                                                   int inicio, int fin) {
+    unsigned prohibidos = 0;
+    int posicion = 0;
+    for (TACInst *i = desde; i != NULL && i->op != TAC_FUNC_END;
+         i = i->next, posicion++) {
+        if (posicion <= inicio || posicion >= fin) continue;
+        if (i->op == TAC_CALL || i->op == TAC_DIV || i->op == TAC_MOD)
+            return 0x0ffcu;
+        if (i->op == TAC_PARAM && i->aux >= 1 && i->aux <= 4)
+            prohibidos |= 1u << (R_ARG0 + i->aux - 1);
+        if (i->op == TAC_FEISTEL || i->op == TAC_FEISTEL_DECRYPT)
+            for (int r = 2; r <= 5; r++) prohibidos |= 1u << r;
+    }
+    return prohibidos;
+}
+
+static int temporales_solapan(int a, int b) {
+    return temp_primero[a] <= temp_ultimo[b] &&
+           temp_primero[b] <= temp_ultimo[a];
+}
+
+static void asignacion_imprimir_funcion(void) {
+    if (asig_salida == NULL) return;
+    int spills = 0;
+    for (int t = 0; t < n_temps; t++) {
+        if (temp_reg[t] < 0 && temp_slot[t] >= 0) {
+            spills++;
+        }
+    }
+    fprintf(asig_salida, "Funcion %s: %d temporales, %d derramados\n",
+            func, n_temps, spills);
+    for (int t = 0; t < n_temps; t++) {
+        fprintf(asig_salida, "  %s [%d,%d] -> ",
+                temps[t], temp_primero[t], temp_ultimo[t]);
+        if (temp_tiene_constante[t] && temp_solo_indice_fijo[t]) {
+            fputs("constante de indice (sin registro ni slot)\n", asig_salida);
+        } else if (temp_reg[t] >= 0) {
+            fprintf(asig_salida, "R%d\n", temp_reg[t]);
+        } else if (temp_slot[t] >= 0) {
+            fprintf(asig_salida, "spill slot %d\n", temp_slot[t]);
+        } else {
+            fputs("sin ubicacion\n", asig_salida);
+        }
+    }
+}
+
+static bool siguiente_uso_en_ra(const char *nombre) {
+    if (tac_actual == NULL || tac_actual->next == NULL) return false;
+    TACInst *siguiente = tac_actual->next;
+    if (siguiente->op == TAC_STORE && siguiente->arg2 != NULL &&
+        strcmp(siguiente->arg2, nombre) == 0 && store_fijo(siguiente, NULL))
+        return true;
+    if (siguiente->arg1 == NULL ||
+        strcmp(siguiente->arg1, nombre) != 0)
+        return false;
+    switch (siguiente->op) {
+        case TAC_ASSIGN: case TAC_ADD: case TAC_SUB: case TAC_MUL:
+        case TAC_AND: case TAC_OR: case TAC_XOR:
+        case TAC_SHL: case TAC_SHR: case TAC_USHR:
+        case TAC_CHECK: case TAC_IF_FALSE: case TAC_IF_TRUE:
+        case TAC_PARAM: case TAC_RET_VAL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 /* Carga el valor del operando en un registro. */
 static void cargar(int rd, const char *nombre) {
+    if (tac_es_temporal(nombre)) {
+        int t = indice_temp(nombre);
+        if (t >= 0 && temp_reg[t] >= 0) {
+            if (temp_reg[t] != rd) mover(rd, temp_reg[t]);
+            return;
+        }
+    }
     /* Si el valor ya esta en un registro, no hace falta volver a leerlo. */
     if (cache_nombre != NULL && nombre != NULL &&
         strcmp(cache_nombre, nombre) == 0) {
@@ -598,26 +966,67 @@ static void cargar(int rd, const char *nombre) {
     int d = disp_de(nombre);
     if (d < 0) {
         diag_error("E410", 0, 1, 1, "la fase 4 no pudo ubicar '%s' en '%s'",
-                   nombre ? nombre : "(nulo)", func ? func : "?");
+                   nombre ? tac_nombre_fuente(nombre) : "(nulo)",
+                   func ? func : "?");
         hubo_error = true;
         cargar_const(rd, 0);
         return;
     }
     lw(rd, R_SP, d);
+    if (tac_es_temporal(nombre)) cargas_temporales_emitidas++;
 }
 
 static void guardar(int rfuente, const char *nombre) {
+    if (tac_es_temporal(nombre)) {
+        int t = indice_temp(nombre);
+        if (t >= 0 && temp_reg[t] >= 0) {
+            if (temp_ultimo[t] <= tac_posicion_actual) return;
+            if (temp_reg[t] != rfuente) mover(temp_reg[t], rfuente);
+            cache_reg = temp_reg[t];
+            cache_nombre = nombre;
+            return;
+        }
+    }
     int d = disp_de(nombre);
     if (d < 0) {
         diag_error("E410", 0, 1, 1, "la fase 4 no pudo ubicar '%s' en '%s'",
-                   nombre ? nombre : "(nulo)", func ? func : "?");
+                   nombre ? tac_nombre_fuente(nombre) : "(nulo)",
+                   func ? func : "?");
         hubo_error = true;
         return;
     }
+    if (tac_es_temporal(nombre)) {
+        int t = indice_temp(nombre);
+        if (t >= 0 && temp_ultimo[t] <= tac_posicion_actual) return;
+        if (t >= 0 && temp_ultimo[t] == tac_posicion_actual + 1 &&
+            siguiente_uso_en_ra(nombre)) {
+            cache_reg = rfuente;
+            cache_nombre = nombre;
+            return;
+        }
+    }
     sw(rfuente, R_SP, d);
+    if (tac_es_temporal(nombre)) stores_temporales_emitidos++;
     /* Este registro queda con el valor de este nombre. */
     cache_reg = rfuente;
     cache_nombre = nombre;
+}
+
+static int registro_operando(const char *nombre, int scratch) {
+    if (tac_es_temporal(nombre)) {
+        int t = indice_temp(nombre);
+        if (t >= 0 && temp_reg[t] >= 0) return temp_reg[t];
+    }
+    cargar(scratch, nombre);
+    return scratch;
+}
+
+static int registro_destino(const char *nombre, int scratch) {
+    if (tac_es_temporal(nombre)) {
+        int t = indice_temp(nombre);
+        if (t >= 0 && temp_reg[t] >= 0) return temp_reg[t];
+    }
+    return scratch;
 }
 
 /*
@@ -630,7 +1039,8 @@ static void direccion_base(int rd, const char *nombre) {
     const TACSimbolo *s = sim_de(nombre);
     int d = disp_de(nombre);
     if (d < 0) {
-        diag_error("E410", 0, 1, 1, "arreglo '%s' no ubicado", nombre ? nombre : "?");
+        diag_error("E410", 0, 1, 1, "arreglo '%s' no ubicado",
+                   nombre ? tac_nombre_fuente(nombre) : "?");
         hubo_error = true;
         cargar_const(rd, 0);
         return;
@@ -659,9 +1069,10 @@ static const char *cond_de(TACOp op, bool *invertir_operandos) {
 static void emitir_comparacion(TACInst *i) {
     bool inv;
     const char *c = cond_de(i->op, &inv);
-    cargar(RA, i->arg1);
-    cargar(RB, i->arg2);
-    if (inv) cmp_reg(RB, RA); else cmp_reg(RA, RB);
+    int rs1 = registro_operando(i->arg1, RA);
+    int rs2 = registro_operando(i->arg2, RB);
+    int rd = registro_destino(i->result, RA);
+    if (inv) cmp_reg(rs2, rs1); else cmp_reg(rs1, rs2);
 
     char l_si[32], l_fin[32];
     static int n = 0;
@@ -673,14 +1084,14 @@ static void emitir_comparacion(TACInst *i) {
     snprintf(br, sizeof(br), "br.%s %s", c, l_si);
     hasta(listo_flags);
     salto(br, -1);
-    cargar_const(RA, 0);
+    cargar_const(rd, 0);
     char j[48];
     snprintf(j, sizeof(j), "br.al %s", l_fin);
     salto(j, -1);
     etiqueta(l_si);
-    cargar_const(RA, 1);
+    cargar_const(rd, 1);
     etiqueta(l_fin);
-    guardar(RA, i->result);
+    guardar(rd, i->result);
 }
 
 /* Acceso indexado: direccion = base + indice*4. */
@@ -721,23 +1132,49 @@ static void emitir_inst(TACInst *i) {
             break;
 
         case TAC_CONST:
-            cargar_const(RA, i->valor);
-            guardar(RA, i->result);
+            {
+                int t = indice_temp(i->result);
+                if (t >= 0 && temp_tiene_constante[t] &&
+                    temp_solo_indice_fijo[t])
+                    break;
+            }
+            {
+                int rd = registro_destino(i->result, RA);
+                cargar_const(rd, i->valor);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_STR:
-            cargar_etiqueta(RA, i->arg1);
-            guardar(RA, i->result);
+            {
+                int rd = registro_destino(i->result, RA);
+                cargar_etiqueta(rd, i->arg1);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_ASSIGN:
-            cargar(RA, i->arg1);
-            guardar(RA, i->result);
+            {
+                int rs = registro_operando(i->arg1, RA);
+                int rd = registro_destino(i->result, RA);
+                if (rd != rs) mover(rd, rs);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_ADD: case TAC_SUB: case TAC_MUL:
         case TAC_AND: case TAC_OR:  case TAC_XOR:
         case TAC_SHL: case TAC_SHR: case TAC_USHR: {
+            if (i->op == TAC_SHL) {
+                int shift;
+                if (shift_constante_inmediato(i->arg2, &shift)) {
+                    int rs1 = registro_operando(i->arg1, RA);
+                    int rd = registro_destino(i->result, RA);
+                    alu_inm("slli", rd, rs1, shift);
+                    guardar(rd, i->result);
+                    break;
+                }
+            }
             const char *op = "add";
             switch (i->op) {
                 case TAC_ADD: op = "add"; break;
@@ -751,10 +1188,11 @@ static void emitir_inst(TACInst *i) {
                 case TAC_USHR: op = "srl"; break;  /* >>> logico     */
                 default: break;
             }
-            cargar(RA, i->arg1);
-            cargar(RB, i->arg2);
-            alu3(op, RA, RA, RB);
-            guardar(RA, i->result);
+            int rs1 = registro_operando(i->arg1, RA);
+            int rs2 = registro_operando(i->arg2, RB);
+            int rd = registro_destino(i->result, RA);
+            alu3(op, rd, rs1, rs2);
+            guardar(rd, i->result);
             break;
         }
 
@@ -763,8 +1201,10 @@ static void emitir_inst(TACInst *i) {
              * soporte de ejecucion, que deja el cociente en R6 y el resto
              * en R7. */
             usa_div = true;
-            cargar(R_ARG0, i->arg1);
-            cargar(R_ARG0 + 1, i->arg2);
+            cargar(RA, i->arg1);
+            cargar(RB, i->arg2);
+            mover(R_ARG0, RA);
+            mover(R_ARG0 + 1, RB);
             salto("jal.al __nova_div32", -1);
             for (int r = 0; r < 16; r++) listo[r] = ciclo;
             guardar(i->op == TAC_DIV ? R_ARG0 : R_ARG0 + 1, i->result);
@@ -776,23 +1216,30 @@ static void emitir_inst(TACInst *i) {
             break;
 
         case TAC_NEG:
-            cargar(RA, i->arg1);
-            snprintf(buf, sizeof(buf), "neg r%d, r%d", RA, RA);
-            emitir(S_ALU0, buf, RA, RA, -1);
-            guardar(RA, i->result);
+            {
+                int rs = registro_operando(i->arg1, RA);
+                int rd = registro_destino(i->result, RA);
+                snprintf(buf, sizeof(buf), "neg r%d, r%d", rd, rs);
+                emitir(S_ALU0, buf, rd, rs, -1);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_BITNOT:
-            cargar(RA, i->arg1);
-            snprintf(buf, sizeof(buf), "not r%d, r%d", RA, RA);
-            emitir(S_ALU0, buf, RA, RA, -1);
-            guardar(RA, i->result);
+            {
+                int rs = registro_operando(i->arg1, RA);
+                int rd = registro_destino(i->result, RA);
+                snprintf(buf, sizeof(buf), "not r%d, r%d", rd, rs);
+                emitir(S_ALU0, buf, rd, rs, -1);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_NOT: {
             /* non a  es  (a == 0) */
-            cargar(RA, i->arg1);
-            cmp_inm(RA, 0);
+            int rs = registro_operando(i->arg1, RA);
+            int rd = registro_destino(i->result, RA);
+            cmp_inm(rs, 0);
             static int n = 0;
             char l_si[32], l_fin[32];
             snprintf(l_si, sizeof(l_si), "__n%d_si", n);
@@ -801,26 +1248,39 @@ static void emitir_inst(TACInst *i) {
             snprintf(buf, sizeof(buf), "br.eq %s", l_si);
             hasta(listo_flags);
             salto(buf, -1);
-            cargar_const(RA, 0);
+            cargar_const(rd, 0);
             snprintf(buf, sizeof(buf), "br.al %s", l_fin);
             salto(buf, -1);
             etiqueta(l_si);
-            cargar_const(RA, 1);
+            cargar_const(rd, 1);
             etiqueta(l_fin);
-            guardar(RA, i->result);
+            guardar(rd, i->result);
             break;
         }
 
         case TAC_LOAD:
             emitir_direccion_elemento(i->arg1, i->arg2);
-            lw(RA, RB, 0);
-            guardar(RA, i->result);
+            {
+                int rd = registro_destino(i->result, RA);
+                lw(rd, RB, 0);
+                guardar(rd, i->result);
+            }
             break;
 
         case TAC_STORE:
+            {
+                int desplazamiento;
+                if (store_fijo(i, &desplazamiento)) {
+                    int rdato = registro_operando(i->arg2, RA);
+                    sw(rdato, R_SP, desplazamiento);
+                    break;
+                }
+            }
             emitir_direccion_elemento(i->result, i->arg1);
-            cargar(RA, i->arg2);
-            sw(RA, RB, 0);
+            {
+                int rdato = registro_operando(i->arg2, RA);
+                sw(rdato, RB, 0);
+            }
             break;
 
         case TAC_ADDR:
@@ -829,19 +1289,20 @@ static void emitir_inst(TACInst *i) {
             break;
 
         case TAC_LEN: {
+            int rd = registro_destino(i->result, RA);
             const TACSimbolo *s = sim_de(i->arg1);
             if (s != NULL && s->es_param && s->dims > 0) {
                 /* El descriptor lleva un tamano por dimension. */
                 int d = disp_de(i->arg1);
-                lw(RA, R_SP, d + 4 * (1 + i->aux));
+                lw(rd, R_SP, d + 4 * (1 + i->aux));
             } else if (s != NULL && s->dims > 0) {
-                cargar_const(RA, i->aux == 0 ? s->filas : s->cols);
+                cargar_const(rd, i->aux == 0 ? s->filas : s->cols);
             } else {
                 /* textus: la primera palabra del literal es su longitud. */
                 cargar(RB, i->arg1);
-                lw(RA, RB, 0);
+                lw(rd, RB, 0);
             }
-            guardar(RA, i->result);
+            guardar(rd, i->result);
             break;
         }
 
@@ -851,9 +1312,9 @@ static void emitir_inst(TACInst *i) {
             static int n = 0;
             char l_ok[32];
             snprintf(l_ok, sizeof(l_ok), "__rango%d_ok", n++);
-            cargar(RA, i->arg1);
-            cargar(RB, i->arg2);
-            cmp_reg(RA, RB);
+            int rs1 = registro_operando(i->arg1, RA);
+            int rs2 = registro_operando(i->arg2, RB);
+            cmp_reg(rs1, rs2);
             snprintf(buf, sizeof(buf), "br.ltu %s", l_ok);
             hasta(listo_flags);
             salto(buf, -1);
@@ -875,8 +1336,7 @@ static void emitir_inst(TACInst *i) {
             break;
 
         case TAC_IF_FALSE:
-            cargar(RA, i->arg1);
-            cmp_inm(RA, 0);
+            cmp_inm(registro_operando(i->arg1, RA), 0);
             snprintf(buf, sizeof(buf), "br.eq %s", i->result);
             hasta(listo_flags);
             salto(buf, -1);
@@ -889,8 +1349,7 @@ static void emitir_inst(TACInst *i) {
                 snprintf(buf, sizeof(buf), "br.auth %s", i->result);
                 salto(buf, -1);
             } else {
-                cargar(RA, i->arg1);
-                cmp_inm(RA, 0);
+                cmp_inm(registro_operando(i->arg1, RA), 0);
                 snprintf(buf, sizeof(buf), "br.ne %s", i->result);
                 hasta(listo_flags);
                 salto(buf, -1);
@@ -957,7 +1416,8 @@ static void emitir_inst(TACInst *i) {
 
         case TAC_VAULT_LOGIN:
             emitir(S_CRP, "login", -1, -1, -1);
-            listo_flags = ciclo + 2;
+            paquete_escribe_flags[S_CRP] = 1;
+            listo_flags = ciclo + 3;
             break;
 
         case TAC_VAULT_LOGOUT:
@@ -977,16 +1437,18 @@ static void emitir_inst(TACInst *i) {
             /* Las rondas operan sobre el par P0 = R0:R1, con L en el par y R
              * en el impar. Se cargan, se ejecuta la ronda y se devuelven al
              * arreglo, porque la instruccion reescribe los mismos registros. */
-            cargar(RB, i->arg1);
-            lw(0, RB, 0);
-            lw(1, RB, 4);
+            cargar(R_PTR, i->arg1);
+            lw(0, R_PTR, 0);
+            lw(1, R_PTR, 4);
             snprintf(buf, sizeof(buf), "%s p0, k%ld, #%d",
                      i->op == TAC_FEISTEL ? "f4e" : "f4d",
                      i->valor, i->aux);
             emitir(S_CRP, buf, 0, 0, 1);
+            paquete_escrituras |= mascara_registro(1);
+            paquete_escrituras_slot[S_CRP] |= mascara_registro(1);
             listo[1] = listo[0];
-            sw(0, RB, 0);
-            sw(1, RB, 4);
+            sw(0, R_PTR, 0);
+            sw(1, R_PTR, 4);
             break;
 
         case TAC_HALT:
@@ -1434,6 +1896,8 @@ static void medir_funcion(TACInst *desde) {
     f_marco_loc = 0;
     f_guarda_r15 = false;
     n_temps = 0;
+    if (cap_tabla_temps != 0)
+        memset(tabla_temps, 0, cap_tabla_temps * sizeof(*tabla_temps));
     n_temp_slots = 0;
     int k_salida = 0;
 
@@ -1452,6 +1916,11 @@ static void medir_funcion(TACInst *desde) {
         /* Registra los temporales en el orden en que aparecen. */
         if (i->result != NULL && tac_es_temporal(i->result)) {
             int t = indice_temp(i->result);
+            if (t < 0) return;
+            if (temp_def_pos[t] < 0) temp_def_pos[t] = posicion;
+            temp_tiene_constante[t] = i->op == TAC_CONST;
+            if (temp_tiene_constante[t])
+                temp_valor_constante[t] = i->valor;
             if (temp_primero[t] > posicion) temp_primero[t] = posicion;
             if (temp_ultimo[t] < posicion) temp_ultimo[t] = posicion;
         }
@@ -1459,13 +1928,146 @@ static void medir_funcion(TACInst *desde) {
         for (int k = 0; k < 2; k++) {
             if (ops[k] == NULL || !tac_es_temporal(ops[k])) continue;
             int t = indice_temp(ops[k]);
+            if (t < 0) return;
             if (temp_primero[t] > posicion) temp_primero[t] = posicion;
             if (temp_ultimo[t] < posicion) temp_ultimo[t] = posicion;
         }
     }
 
-    int slot_ultimo[MAX_TEMPS];
+    for (TACInst *i = desde; i != NULL; i = i->next) {
+        if (i->op == TAC_FUNC_END) break;
+        const char *ops[2] = {i->arg1, i->arg2};
+        for (int k = 0; k < 2; k++) {
+            if (ops[k] == NULL || !tac_es_temporal(ops[k])) continue;
+            int t = indice_temp(ops[k]);
+            if (t < 0) return;
+            if (!(i->op == TAC_STORE && k == 0 && store_fijo(i, NULL)) &&
+                !(i->op == TAC_SHL && k == 1 &&
+                  shift_constante_inmediato(ops[k], NULL)))
+                temp_solo_indice_fijo[t] = false;
+        }
+    }
+
+    /*
+     * Extiende cada intervalo hasta los bordes de bloque donde la vivacidad
+     * demuestra que el valor cruza el bloque. El intervalo lineal resultante
+     * es conservador ante saltos y ciclos.
+     */
+    const VivacidadFuncion *vf = funcion_viva_actual();
+    if (vf != NULL && vf->vivo_ent != NULL && vf->vivo_sal != NULL) {
+        int inicio_bloque = 0;
+        for (int b = 0; b < vf->fn->n_bloques; b++) {
+            const Bloque *bloque = &vf->fn->bloques[b];
+            int fin_bloque = inicio_bloque + bloque->n_inst - 1;
+            const unsigned *vivo_ent =
+                &vf->vivo_ent[(size_t)b * vf->n_palabras];
+            const unsigned *vivo_sal =
+                &vf->vivo_sal[(size_t)b * vf->n_palabras];
+            for (int n = 0; n < vf->n_nombres; n++) {
+                if (!tac_es_temporal(vf->nombres[n])) continue;
+                int t = indice_temp(vf->nombres[n]);
+                if (t < 0) continue;
+                if (conjunto_contiene(vivo_ent, n) &&
+                    temp_primero[t] > inicio_bloque)
+                    temp_primero[t] = inicio_bloque;
+                if (conjunto_contiene(vivo_sal, n) &&
+                    temp_ultimo[t] < fin_bloque)
+                    temp_ultimo[t] = fin_bloque;
+            }
+            inicio_bloque += bloque->n_inst;
+        }
+    }
+
+    /* R6-R9 pertenecen al ABI: argumentos y retorno, no temporales asignados. */
+    static const int registros[] = {2, 3, 4, 5, 10, 11};
+    int *orden = malloc((size_t)(n_temps > 0 ? n_temps : 1) * sizeof(*orden));
+    int *reg_primer_ajuste = malloc(
+        (size_t)(n_temps > 0 ? n_temps : 1) * sizeof(*reg_primer_ajuste));
+    int ultimo_uso_registro[16];
+    for (int r = 0; r < 16; r++) ultimo_uso_registro[r] = -1;
+    if (reg_primer_ajuste == NULL) error_memoria_temporales();
+    if (orden == NULL) error_memoria_temporales();
+    int n_orden = 0;
     for (int t = 0; t < n_temps; t++) {
+        temp_reg[t] = -1;
+        reg_primer_ajuste[t] = -1;
+        if (temp_ultimo[t] < 0) continue;
+        int p = n_orden;
+        while (p > 0 &&
+               temp_primero[orden[p - 1]] > temp_primero[t]) {
+            orden[p] = orden[p - 1];
+            p--;
+        }
+        orden[p] = t;
+        n_orden++;
+    }
+
+    for (int oi = 0; asignacion_habilitada && oi < n_orden; oi++) {
+        int t = orden[oi];
+        if (temp_tiene_constante[t] && temp_solo_indice_fijo[t]) continue;
+        unsigned prohibidos =
+            registros_prohibidos_en_intervalo(desde, temp_primero[t],
+                                               temp_ultimo[t]);
+        int mejor_registro = -1;
+        int menor_uso = INT_MAX;
+        for (size_t r = 0; r < sizeof(registros) / sizeof(registros[0]); r++) {
+            int candidato = registros[r];
+            bool ocupado_base = (prohibidos & (1u << candidato)) != 0;
+            bool ocupado_actual = ocupado_base;
+            for (int prev = 0; prev < oi; prev++) {
+                int u = orden[prev];
+                if (!temporales_solapan(t, u)) continue;
+                if (reg_primer_ajuste[u] == candidato) ocupado_base = true;
+                if (temp_reg[u] == candidato) ocupado_actual = true;
+            }
+            if (!ocupado_base && reg_primer_ajuste[t] < 0)
+                reg_primer_ajuste[t] = candidato;
+            if (!ocupado_actual &&
+                ultimo_uso_registro[candidato] < menor_uso) {
+                menor_uso = ultimo_uso_registro[candidato];
+                mejor_registro = candidato;
+            }
+        }
+        temp_reg[t] = mejor_registro;
+        if (mejor_registro >= 0 &&
+            temp_ultimo[t] > ultimo_uso_registro[mejor_registro])
+            ultimo_uso_registro[mejor_registro] = temp_ultimo[t];
+    }
+
+    for (int oi = 0; oi < n_orden; oi++) {
+        int t = orden[oi];
+        if (temp_reg[t] < 0) continue;
+        temporales_asignados_registro++;
+        if (temp_reg[t] == reg_primer_ajuste[t] ||
+            reg_primer_ajuste[t] < 0 || vf == NULL ||
+            temp_def_pos[t] < 0)
+            continue;
+        int bloque_t = bloque_de_posicion(vf, temp_def_pos[t]);
+        if (bloque_t < 0) continue;
+        for (int prev = 0; prev < oi; prev++) {
+            int u = orden[prev];
+            if (reg_primer_ajuste[u] != reg_primer_ajuste[t] ||
+                temp_def_pos[u] < 0 ||
+                temp_def_pos[u] >= temp_def_pos[t] ||
+                temporales_solapan(t, u))
+                continue;
+            if (bloque_de_posicion(vf, temp_def_pos[u]) == bloque_t) {
+                renombradas++;
+                break;
+            }
+        }
+    }
+
+    int *slot_ultimo = malloc(
+        (size_t)(n_temps > 0 ? n_temps : 1) * sizeof(*slot_ultimo));
+    if (slot_ultimo == NULL) error_memoria_temporales();
+    for (int s = 0; s < n_temps; s++) slot_ultimo[s] = -1;
+    for (int t = 0; t < n_temps; t++) {
+        if (temp_reg[t] >= 0 ||
+            (temp_tiene_constante[t] && temp_solo_indice_fijo[t])) {
+            temp_slot[t] = -1;
+            continue;
+        }
         int slot = -1;
         for (int s = 0; s < n_temp_slots; s++) {
             if (slot_ultimo[s] < temp_primero[t]) {
@@ -1478,10 +2080,21 @@ static void medir_funcion(TACInst *desde) {
         slot_ultimo[slot] = temp_ultimo[t];
     }
 
+    if (asignacion_habilitada) {
+        for (int t = 0; t < n_temps; t++) {
+            if (temp_reg[t] < 0 && temp_slot[t] >= 0)
+                temporales_derramados++;
+        }
+    }
+
     f_base_loc = 4 * k_salida;
     f_base_tmp = f_base_loc + f_marco_loc;
     f_total = f_base_tmp + 4 * n_temp_slots + (f_guarda_r15 ? 4 : 0);
     if (f_total < 4) f_total = 4;
+    asignacion_imprimir_funcion();
+    free(slot_ultimo);
+    free(reg_primer_ajuste);
+    free(orden);
 }
 
 /*
@@ -1491,6 +2104,7 @@ static void medir_funcion(TACInst *desde) {
  * colgando.
  */
 static void liberar_construccion(void) {
+    paquete_descartar();
     for (int b = 0; b < n_bundles; b++)
         for (int s = 0; s < 5; s++) { free(prog[b].s[s]); prog[b].s[s] = NULL; }
     for (int i = 0; i < n_etqs; i++) free(etqs[i].nombre);
@@ -1499,9 +2113,667 @@ static void liberar_construccion(void) {
     n_bundles = n_etqs = n_etqs_dato = n_notas = 0;
 }
 
+typedef struct {
+    const char *texto;
+    int slot;
+    int linea, columna;
+    int orden_programado;
+    unsigned int lecturas, escrituras;
+    bool escribe_flags;
+    bool memoria, memoria_fija, memoria_escritura;
+    int direccion_memoria, ciclo_programado;
+    unsigned int slots_permitidos;
+    int pendientes, primero_entrante, primero_saliente;
+    int ciclo_minimo, camino_critico;
+    bool delay_seguro;
+} InstruccionPlan;
+
+typedef enum {
+    DEP_RAW     = 1u << 0,
+    DEP_WAR     = 1u << 1,
+    DEP_WAW     = 1u << 2,
+    DEP_MEMORIA = 1u << 3,
+    DEP_FLAGS   = 1u << 4,
+    DEP_EFECTO  = 1u << 5
+} TipoDependencia;
+
+typedef struct {
+    int antes, despues, latencia, registro;
+    unsigned int tipos;
+    int siguiente_salida, siguiente_entrada;
+} DependenciaPlan;
+
+static void datos_memoria(const char *texto, bool *fija, bool *escritura,
+                          int *direccion) {
+    char operacion[8];
+    int registro, desplazamiento, base;
+    *fija = false;
+    *escritura = false;
+    *direccion = 0;
+    if (sscanf(texto, "%7s r%d, #%d(r%d)", operacion, &registro,
+               &desplazamiento, &base) != 4)
+        return;
+    if (strcmp(operacion, "lw") != 0 && strcmp(operacion, "sw") != 0)
+        return;
+    *escritura = strcmp(operacion, "sw") == 0;
+    if (base == R_SP) {
+        *fija = true;
+        *direccion = desplazamiento;
+    }
+}
+
+static void salida_asegurar(Bundle **salida, int *capacidad, int necesario) {
+    if (necesario <= *capacidad) return;
+    int nueva = *capacidad ? *capacidad * 2 : 256;
+    while (nueva < necesario) nueva *= 2;
+    Bundle *p = realloc(*salida, (size_t)nueva * sizeof(Bundle));
+    if (p == NULL) {
+        fprintf(stderr, "novac: sin memoria\n");
+        exit(3);
+    }
+    memset(p + *capacidad, 0,
+           (size_t)(nueva - *capacidad) * sizeof(Bundle));
+    *salida = p;
+    *capacidad = nueva;
+}
+
+static void agregar_dependencia(InstruccionPlan *insts,
+                                DependenciaPlan **dependencias,
+                                int *n_dependencias, int *cap_dependencias,
+                                int antes, int despues, int latencia,
+                                unsigned int tipos, int registro) {
+    if (*n_dependencias == *cap_dependencias) {
+        int nueva = *cap_dependencias ? *cap_dependencias * 2 : 128;
+        DependenciaPlan *p = realloc(*dependencias,
+                                     (size_t)nueva * sizeof(DependenciaPlan));
+        if (p == NULL) {
+            fprintf(stderr, "novac: sin memoria\n");
+            exit(3);
+        }
+        *dependencias = p;
+        *cap_dependencias = nueva;
+    }
+
+    int indice = (*n_dependencias)++;
+    (*dependencias)[indice] = (DependenciaPlan){
+        antes, despues, latencia, registro, tipos,
+        insts[antes].primero_saliente, insts[despues].primero_entrante
+    };
+    if (tipos & DEP_WAR) dependencias_war++;
+    if (tipos & DEP_WAW) dependencias_waw++;
+    insts[antes].primero_saliente = indice;
+    insts[despues].primero_entrante = indice;
+    insts[despues].pendientes++;
+}
+
+static void considerar_hazard(int latencia, unsigned int tipo, int registro,
+                              int *latencia_maxima, unsigned int *tipos,
+                              int *registro_dep) {
+    if (latencia > *latencia_maxima) *latencia_maxima = latencia;
+    *tipos |= tipo;
+    if (registro >= 0 && (*registro_dep < 0 || tipo == DEP_RAW))
+        *registro_dep = registro;
+}
+
+static void construir_grafo_dependencias(InstruccionPlan *insts, int n_insts,
+                                         DependenciaPlan **dependencias,
+                                         int *n_dependencias) {
+    int capacidad = 0;
+    *dependencias = NULL;
+    *n_dependencias = 0;
+    for (int i = 0; i < n_insts; i++) {
+        insts[i].pendientes = 0;
+        insts[i].primero_entrante = -1;
+        insts[i].primero_saliente = -1;
+        insts[i].ciclo_minimo = 0;
+        insts[i].ciclo_programado = -1;
+        insts[i].camino_critico = 1;
+        insts[i].delay_seguro = false;
+        insts[i].slots_permitidos = 1u << (unsigned int)insts[i].slot;
+        if (insts[i].slot == S_ALU0 && !insts[i].escribe_flags)
+            insts[i].slots_permitidos |= 1u << S_ALU1;
+    }
+
+    for (int i = 0; i < n_insts; i++) {
+        for (int j = i + 1; j < n_insts; j++) {
+            int latencia = 0, registro = -1;
+            unsigned int tipos = 0;
+
+            for (int r = 0; r < 16; r++) {
+                unsigned int bit = mascara_registro(r);
+                bool escribe_i = (insts[i].escrituras & bit) != 0;
+                bool lee_i = (insts[i].lecturas & bit) != 0;
+                bool escribe_j = (insts[j].escrituras & bit) != 0;
+                bool lee_j = (insts[j].lecturas & bit) != 0;
+                if (escribe_i && lee_j)
+                    considerar_hazard(3, DEP_RAW, r, &latencia, &tipos,
+                                      &registro);
+                if (lee_i && escribe_j)
+                    considerar_hazard(1, DEP_WAR, r, &latencia, &tipos,
+                                      &registro);
+                if (escribe_i && escribe_j)
+                    considerar_hazard(1, DEP_WAW, r, &latencia, &tipos,
+                                      &registro);
+            }
+
+            if (insts[i].memoria && insts[j].memoria) {
+                bool depende = !insts[i].memoria_fija ||
+                    !insts[j].memoria_fija ||
+                    (insts[i].direccion_memoria == insts[j].direccion_memoria &&
+                     (insts[i].memoria_escritura ||
+                      insts[j].memoria_escritura));
+                if (depende)
+                    considerar_hazard(1, DEP_MEMORIA, -1, &latencia, &tipos,
+                                      &registro);
+            }
+            if (insts[i].escribe_flags && insts[j].escribe_flags)
+                considerar_hazard(1, DEP_FLAGS, -1, &latencia, &tipos,
+                                  &registro);
+            if (insts[i].slot == S_CRP && insts[j].slot == S_CRP)
+                considerar_hazard(1, DEP_EFECTO, -1, &latencia, &tipos,
+                                  &registro);
+
+            if (latencia > 0)
+                agregar_dependencia(insts, dependencias, n_dependencias,
+                                    &capacidad, i, j, latencia, tipos, registro);
+        }
+    }
+
+    for (int i = n_insts - 1; i >= 0; i--) {
+        for (int e = insts[i].primero_saliente; e >= 0;
+             e = (*dependencias)[e].siguiente_salida) {
+            DependenciaPlan *d = &(*dependencias)[e];
+            int longitud = d->latencia + insts[d->despues].camino_critico;
+            if (longitud > insts[i].camino_critico)
+                insts[i].camino_critico = longitud;
+        }
+        insts[i].delay_seguro =
+            insts[i].primero_saliente < 0 && !insts[i].memoria &&
+            !insts[i].escribe_flags && insts[i].escrituras != 0;
+    }
+}
+
+static const char *nombre_dependencia(unsigned int tipos) {
+    if (tipos & DEP_RAW) return "RAW";
+    if (tipos & DEP_WAR) return "WAR";
+    if (tipos & DEP_WAW) return "WAW";
+    if (tipos & DEP_MEMORIA) return "memoria";
+    if (tipos & DEP_FLAGS) return "banderas";
+    if (tipos & DEP_EFECTO) return "efecto";
+    return "dependencia";
+}
+
+static void explicar_dependencia(char *destino, size_t capacidad,
+                                 const InstruccionPlan *insts,
+                                 const DependenciaPlan *d) {
+    char dependencia[48];
+    if ((d->tipos & (DEP_RAW | DEP_WAR | DEP_WAW)) && d->registro >= 0)
+        snprintf(dependencia, sizeof(dependencia), "%s R%d",
+                 nombre_dependencia(d->tipos), d->registro);
+    else
+        snprintf(dependencia, sizeof(dependencia), "%s",
+                 nombre_dependencia(d->tipos));
+    snprintf(destino, capacidad,
+             "dependencia %s: op %d '%s' -> op %d '%s' (%d bundles)",
+             dependencia, d->antes + 1, insts[d->antes].texto,
+             d->despues + 1, insts[d->despues].texto, d->latencia);
+}
+
+static int dependencia_que_bloquea(const InstruccionPlan *insts,
+                                   const DependenciaPlan *dependencias,
+                                   int objetivo, int ciclo) {
+    int mejor = -1, mayor_limite = -1, prioridad = -1;
+    for (int e = insts[objetivo].primero_entrante; e >= 0;
+         e = dependencias[e].siguiente_entrada) {
+        const DependenciaPlan *d = &dependencias[e];
+        const InstruccionPlan *anterior = &insts[d->antes];
+        int limite = anterior->ciclo_programado < 0
+            ? INT_MAX : anterior->ciclo_programado + d->latencia;
+        int prioridad_actual = anterior->ciclo_programado < 0
+            ? anterior->camino_critico : limite;
+        if ((anterior->ciclo_programado < 0 || limite > ciclo) &&
+            (prioridad_actual > prioridad ||
+             (prioridad_actual == prioridad && limite > mayor_limite))) {
+            mejor = e;
+            prioridad = prioridad_actual;
+            mayor_limite = limite;
+        }
+    }
+    return mejor;
+}
+
+static void explicar_nop_slot(char *destino, size_t capacidad,
+                              const InstruccionPlan *insts,
+                              const DependenciaPlan *dependencias,
+                              int n_insts, int ciclo, int slot) {
+    int objetivo = -1;
+    for (int i = 0; i < n_insts; i++) {
+        if (insts[i].ciclo_programado >= 0 ||
+            !(insts[i].slots_permitidos & (1u << (unsigned int)slot)))
+            continue;
+        if (objetivo < 0 ||
+            insts[i].camino_critico > insts[objetivo].camino_critico)
+            objetivo = i;
+    }
+    if (objetivo < 0) {
+        snprintf(destino, capacidad, "sin operacion pendiente compatible con S%d",
+                 slot);
+        return;
+    }
+    int dependencia = dependencia_que_bloquea(insts, dependencias,
+                                               objetivo, ciclo);
+    if (dependencia >= 0) {
+        explicar_dependencia(destino, capacidad, insts,
+                             &dependencias[dependencia]);
+    } else {
+        snprintf(destino, capacidad,
+                 "conflicto de recursos/puertos antes de op %d '%s'",
+                 objetivo + 1, insts[objetivo].texto);
+    }
+}
+
+static bool puede_ocupar_slot(const Bundle *bundle_actual,
+                              const InstruccionPlan *in, int slot) {
+    if (bundle_actual->s[slot] != NULL) return false;
+    unsigned int lecturas = 0, escrituras = 0;
+    for (int s = 0; s < 5; s++) {
+        lecturas |= bundle_actual->lecturas[s];
+        escrituras |= bundle_actual->escrituras[s];
+    }
+    return (in->escrituras & (lecturas | escrituras)) == 0 &&
+           (in->lecturas & escrituras) == 0;
+}
+
+static bool es_operacion_alu_pura(const char *texto) {
+    static const char *const mnemonicos[] = {
+        "add", "sub", "mul", "and", "or", "xor", "sll", "srl", "sra",
+        "rol", "ror", "mov", "not", "neg", "addi", "subi", "andi",
+        "ori", "xori", "slli", "srli", "srai", "roli", "movi", "movh",
+        NULL
+    };
+    char mnem[16];
+    if (sscanf(texto, "%15s", mnem) != 1) return false;
+    for (int i = 0; mnemonicos[i] != NULL; i++)
+        if (strcmp(mnem, mnemonicos[i]) == 0) return true;
+    return false;
+}
+
+static void razon_relleno(Bundle *bundle, const char *motivo) {
+    for (int s = 0; s < 5; s++)
+        snprintf(bundle->razon_nop[s], sizeof(bundle->razon_nop[s]), "%s",
+                 motivo);
+}
+
+static int primer_registro_escrito(unsigned int registros) {
+    for (int r = 0; r < 16; r++)
+        if (registros & mascara_registro(r)) return r;
+    return 0;
+}
+
+static void calendarizar_tramo(const Bundle *entrada, int desde, int hasta_i,
+                              Bundle **salida, int *n_salida, int *cap_salida,
+                              int *mapa) {
+    int base = *n_salida;
+    for (int b = desde; b < hasta_i; b++) mapa[b] = base;
+
+    int cantidad = 0;
+    for (int b = desde; b < hasta_i; b++)
+        for (int s = 0; s < 5; s++)
+            if (entrada[b].s[s] != NULL && entrada[b].planificable[s])
+                cantidad++;
+    if (cantidad == 0) {
+        mapa[hasta_i] = base;
+        return;
+    }
+
+    InstruccionPlan *insts = calloc((size_t)cantidad, sizeof(InstruccionPlan));
+    if (insts == NULL) {
+        fprintf(stderr, "novac: sin memoria\n");
+        exit(3);
+    }
+    int n_insts = 0;
+    for (int b = desde; b < hasta_i; b++) {
+        for (int s = 0; s < 5; s++) {
+            if (entrada[b].s[s] == NULL || !entrada[b].planificable[s]) continue;
+            insts[n_insts] = (InstruccionPlan){
+                .texto = entrada[b].s[s],
+                .slot = s,
+                .linea = entrada[b].source_line,
+                .columna = entrada[b].source_col,
+                .orden_programado = -1,
+                .lecturas = entrada[b].lecturas[s],
+                .escrituras = entrada[b].escrituras[s],
+                .escribe_flags = entrada[b].escribe_flags[s] != 0,
+                .memoria = s == S_LSU,
+                .ciclo_programado = -1
+            };
+            n_insts++;
+            if (s == S_LSU) {
+                InstruccionPlan *in = &insts[n_insts - 1];
+                datos_memoria(in->texto, &in->memoria_fija,
+                              &in->memoria_escritura, &in->direccion_memoria);
+            }
+        }
+    }
+
+    DependenciaPlan *dependencias = NULL;
+    int n_dependencias = 0;
+    construir_grafo_dependencias(insts, n_insts, &dependencias,
+                                 &n_dependencias);
+
+    int ciclo = 0, emitidas = 0, ultimo_ciclo = -1;
+    while (emitidas < n_insts) {
+        salida_asegurar(salida, cap_salida, base + ciclo + 1);
+        Bundle *b = &(*salida)[base + ciclo];
+
+        for (;;) {
+            int mejor = -1, mejor_slot = -1;
+            for (int i = 0; i < n_insts; i++) {
+                InstruccionPlan *in = &insts[i];
+                if (nivel_opt < 2 && i != emitidas) continue;
+                if (in->ciclo_programado >= 0 || in->pendientes != 0 ||
+                    in->ciclo_minimo > ciclo)
+                    continue;
+                for (int s = 0; s < 5; s++) {
+                    if (!(in->slots_permitidos & (1u << (unsigned int)s)) ||
+                        !puede_ocupar_slot(b, in, s))
+                        continue;
+                    if (mejor < 0 ||
+                        in->camino_critico > insts[mejor].camino_critico ||
+                        (in->camino_critico == insts[mejor].camino_critico &&
+                         i < mejor)) {
+                        mejor = i;
+                        mejor_slot = s;
+                    }
+                    break;
+                }
+            }
+            if (mejor < 0) break;
+
+            InstruccionPlan *in = &insts[mejor];
+            b->s[mejor_slot] = (char *)in->texto;
+            b->lecturas[mejor_slot] = in->lecturas;
+            b->escrituras[mejor_slot] = in->escrituras;
+            b->planificable[mejor_slot] = 1;
+            b->escribe_flags[mejor_slot] = in->escribe_flags;
+            b->delay_seguro[mejor_slot] =
+                in->delay_seguro && es_operacion_alu_pura(in->texto);
+            if (b->source_line == 0) {
+                b->source_line = in->linea;
+                b->source_col = in->columna;
+            }
+
+            in->ciclo_programado = ciclo;
+            in->orden_programado = emitidas;
+            emitidas++;
+            ultimo_ciclo = ciclo;
+            for (int e = in->primero_saliente; e >= 0;
+                 e = dependencias[e].siguiente_salida) {
+                DependenciaPlan *d = &dependencias[e];
+                InstruccionPlan *sucesora = &insts[d->despues];
+                int listo = ciclo + d->latencia;
+                if (listo > sucesora->ciclo_minimo)
+                    sucesora->ciclo_minimo = listo;
+                sucesora->pendientes--;
+            }
+        }
+
+        for (int s = 0; s < 5; s++) {
+            if (b->s[s] == NULL)
+                explicar_nop_slot(b->razon_nop[s],
+                                  sizeof(b->razon_nop[s]), insts,
+                                  dependencias, n_insts, ciclo, s);
+        }
+        ciclo++;
+    }
+
+    if (nivel_opt >= 2) {
+        for (int i = 0; i < n_insts; i++)
+            if (insts[i].orden_programado != i)
+                instrucciones_reordenadas++;
+    }
+
+    int largo = ultimo_ciclo + 1;
+    int ultimo_productor = -1, listo_productor = largo;
+    bool productor_flags = false;
+    for (int i = 0; i < n_insts; i++) {
+        int listo = insts[i].ciclo_programado +
+            ((insts[i].escrituras != 0 || insts[i].escribe_flags) ? 3 : 1);
+        if (listo > largo) largo = listo;
+        if ((insts[i].escrituras != 0 || insts[i].escribe_flags) &&
+            listo > listo_productor) {
+            ultimo_productor = i;
+            listo_productor = listo;
+            productor_flags = insts[i].escribe_flags;
+        }
+    }
+    salida_asegurar(salida, cap_salida, base + largo);
+    for (int c = ultimo_ciclo + 1; c < largo; c++) {
+        Bundle *b = &(*salida)[base + c];
+        char motivo[112];
+        if (ultimo_productor >= 0 && productor_flags)
+            snprintf(motivo, sizeof(motivo),
+                     "dependencia CMP S0 -> salto/bloque siguiente (3 bundles)");
+        else if (ultimo_productor >= 0)
+            snprintf(motivo, sizeof(motivo),
+                     "latencia de escritura de R%d -> salto/bloque siguiente "
+                     "(3 bundles)",
+                     primer_registro_escrito(
+                         insts[ultimo_productor].escrituras));
+        else
+            snprintf(motivo, sizeof(motivo),
+                     "espera de la barrera del bloque basico");
+        razon_relleno(b, motivo);
+    }
+
+    *n_salida = base + largo;
+    mapa[hasta_i] = *n_salida;
+    free(dependencias);
+    free(insts);
+}
+
+static void acortar_tramo(Bundle *salida, int base, int *n_salida) {
+    int instrucciones_hasta = 0, latencia_hasta = 0;
+    for (int b = base; b < *n_salida; b++) {
+        for (int s = 0; s < 5; s++) {
+            if (salida[b].s[s] == NULL) continue;
+            int fin = b - base + 1;
+            if (fin > instrucciones_hasta) instrucciones_hasta = fin;
+            if (salida[b].escrituras[s] != 0 ||
+                salida[b].escribe_flags[s]) {
+                fin = b - base + 3;
+                if (fin > latencia_hasta) latencia_hasta = fin;
+            }
+        }
+    }
+    int largo = instrucciones_hasta > latencia_hasta
+        ? instrucciones_hasta : latencia_hasta;
+    *n_salida = base + largo;
+}
+
+static bool llenar_delay_seguro(Bundle *salida, int base, int *n_salida,
+                               Bundle *delay, const char *salto_texto) {
+    int registro_salto = -1;
+    char mnem[16];
+    if (sscanf(salto_texto, "%15s", mnem) != 1 ||
+        strncmp(mnem, "jal", 3) == 0)
+        return false;
+    bool es_halt = strcmp(mnem, "halt") == 0;
+    if (!es_halt) return false;
+    if (sscanf(salto_texto, "%15s r%d", mnem, &registro_salto) != 2)
+        registro_salto = -1;
+
+    /* En halt solo es observable rellenar con resultados scratch R10/R11. */
+    for (int b = *n_salida - 1; b >= base; b--) {
+        for (int s = 0; s <= S_ALU1; s++) {
+            Bundle *origen = &salida[b];
+            unsigned int escritura = origen->escrituras[s];
+            if (delay->s[s] != NULL || !origen->delay_seguro[s] ||
+                (origen->lecturas[s] & mascara_registro(R_LINK)) != 0 ||
+                (escritura &
+                 ~(mascara_registro(RA) | mascara_registro(RB))) != 0 ||
+                (registro_salto >= 0 &&
+                 (escritura & mascara_registro(registro_salto)) != 0))
+                continue;
+
+            delay->s[s] = origen->s[s];
+            delay->lecturas[s] = origen->lecturas[s];
+            delay->escrituras[s] = escritura;
+            delay->planificable[s] = 1;
+            delay->delay_seguro[s] = 0;
+            delay->escribe_flags[s] = origen->escribe_flags[s];
+            if (delay->source_line == 0) {
+                delay->source_line = origen->source_line;
+                delay->source_col = origen->source_col;
+            }
+            origen->s[s] = NULL;
+            origen->lecturas[s] = 0;
+            origen->escrituras[s] = 0;
+            origen->planificable[s] = 0;
+            origen->delay_seguro[s] = 0;
+            origen->escribe_flags[s] = 0;
+            acortar_tramo(salida, base, n_salida);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void calendarizar_programa(void) {
+    paquete_vaciar();
+    int n_originales = n_bundles;
+    int *mapa = malloc((size_t)(n_originales + 1) * sizeof(int));
+    bool *fronteras = calloc((size_t)(n_originales + 1), sizeof(bool));
+    int capacidad_salida = cap_bundles ? cap_bundles : 256;
+    Bundle *salida = calloc((size_t)capacidad_salida, sizeof(Bundle));
+    if (mapa == NULL || fronteras == NULL || salida == NULL) {
+        fprintf(stderr, "novac: sin memoria\n");
+        exit(3);
+    }
+
+    for (int i = 0; i < n_etqs; i++)
+        if (etqs[i].bundle >= 0 && etqs[i].bundle <= n_originales)
+            fronteras[etqs[i].bundle] = true;
+    int inicio_seguro_original = inicio_seguro;
+    if (inicio_seguro_original >= 0 && inicio_seguro_original <= n_originales)
+        fronteras[inicio_seguro_original] = true;
+
+    int nuevos = 0, desde = 0, b = 0;
+    while (b < n_originales) {
+        if (fronteras[b]) {
+            calendarizar_tramo(prog, desde, b, &salida, &nuevos,
+                               &capacidad_salida, mapa);
+            mapa[b] = nuevos;
+            desde = b;
+            if (b == inicio_seguro_original) {
+                while (nuevos < SEC_BASE_BUNDLE) {
+                    salida_asegurar(&salida, &capacidad_salida, nuevos + 1);
+                    memset(&salida[nuevos++], 0, sizeof(Bundle));
+                    razon_relleno(&salida[nuevos - 1],
+                                  "NOP de alineacion a la region segura");
+                }
+                mapa[b] = nuevos;
+            }
+        }
+
+        if (prog[b].s[S_BRU] != NULL) {
+            calendarizar_tramo(prog, desde, b, &salida, &nuevos,
+                               &capacidad_salida, mapa);
+            Bundle delay_bundle;
+            bool delay_lleno = false;
+            if (b + 1 < n_originales) {
+                delay_bundle = prog[b + 1];
+                for (int s = 0; s < 5; s++)
+                    snprintf(delay_bundle.razon_nop[s],
+                             sizeof(delay_bundle.razon_nop[s]),
+                             "NOP de delay slot obligatorio");
+                if (!fronteras[b] && !fronteras[b + 1])
+                    delay_lleno = llenar_delay_seguro(
+                        salida, desde, &nuevos, &delay_bundle, prog[b].s[S_BRU]);
+            }
+            mapa[b] = nuevos;
+            salida_asegurar(&salida, &capacidad_salida, nuevos + 2);
+            salida[nuevos] = prog[b];
+            for (int s = 0; s < S_BRU; s++) {
+                if (salida[nuevos].s[s] == NULL)
+                    snprintf(salida[nuevos].razon_nop[s],
+                             sizeof(salida[nuevos].razon_nop[s]),
+                             "salto en S4: no se mueven operaciones a traves "
+                             "de una frontera de control");
+            }
+            nuevos++;
+            mapa[b + 1] = nuevos;
+            if (b + 1 < n_originales) {
+                if (!delay_lleno)
+                    razon_relleno(&delay_bundle,
+                                  "NOP de delay slot; no hay operacion "
+                                  "independiente segura");
+                salida[nuevos++] = delay_bundle;
+            }
+            b += 2;
+            desde = b;
+            continue;
+        }
+
+        bool opaca = false;
+        for (int s = 0; s < 5; s++)
+            if (prog[b].s[s] != NULL && !prog[b].planificable[s])
+                opaca = true;
+        if (opaca) {
+            calendarizar_tramo(prog, desde, b, &salida, &nuevos,
+                               &capacidad_salida, mapa);
+            mapa[b] = nuevos;
+            salida_asegurar(&salida, &capacidad_salida, nuevos + 1);
+            salida[nuevos++] = prog[b];
+            razon_relleno(&salida[nuevos - 1],
+                          "operacion opaca; no se reordena en el bloque");
+            b++;
+            desde = b;
+            continue;
+        }
+        b++;
+    }
+
+    calendarizar_tramo(prog, desde, n_originales, &salida, &nuevos,
+                       &capacidad_salida, mapa);
+    mapa[n_originales] = nuevos;
+
+    for (int i = 0; i < n_etqs; i++)
+        if (etqs[i].bundle >= 0 && etqs[i].bundle <= n_originales)
+            etqs[i].bundle = mapa[etqs[i].bundle];
+    for (int i = 0; i < n_notas; i++)
+        if (notas[i].bundle >= 0 && notas[i].bundle <= n_originales)
+            notas[i].bundle = mapa[notas[i].bundle];
+    for (int i = 0; i < n_sitios; i++)
+        if (sitio_bundle[i] >= 0 && sitio_bundle[i] <= n_originales)
+            sitio_bundle[i] = mapa[sitio_bundle[i]];
+    if (inicio_seguro_original >= 0)
+        inicio_seguro = mapa[inicio_seguro_original];
+
+    free(prog);
+    prog = salida;
+    cap_bundles = capacidad_salida;
+    n_bundles = nuevos;
+    free(mapa);
+    free(fronteras);
+}
+
 /* Suelta todo lo que reservo el generador. Se llama al terminar. */
 static void liberar_todo(void) {
     liberar_construccion();
+    free(temps); temps = NULL;
+    free(temp_primero); temp_primero = NULL;
+    free(temp_ultimo); temp_ultimo = NULL;
+    free(temp_def_pos); temp_def_pos = NULL;
+    free(temp_slot); temp_slot = NULL;
+    free(temp_reg); temp_reg = NULL;
+    free(temp_tiene_constante); temp_tiene_constante = NULL;
+    free(temp_valor_constante); temp_valor_constante = NULL;
+    free(temp_solo_indice_fijo); temp_solo_indice_fijo = NULL;
+    free(tabla_temps); tabla_temps = NULL;
+    n_temps = 0;
+    cap_temps = 0;
+    cap_tabla_temps = 0;
     free(prog);       prog = NULL;       cap_bundles = 0;
     free(etqs);       etqs = NULL;       cap_etqs = 0;
     free(etqs_dato);  etqs_dato = NULL;  cap_etqs_dato = 0;
@@ -1520,7 +2792,8 @@ static void liberar_todo(void) {
  * tiene que quedar completo adentro.
  */
 static bool funcion_usa_boveda(TACInst *i) {
-    for (TACInst *j = i->next; j != NULL && j->op != TAC_FUNC_END; j = j->next) {
+    for (TACInst *j = i->next; j != NULL && j->op != TAC_FUNC_END;
+         j = j->next) {
         switch (j->op) {
             case TAC_AUTHW: case TAC_VAULT_LOGIN: case TAC_VAULT_LOGOUT:
             case TAC_KSETW: case TAC_FEISTEL: case TAC_FEISTEL_DECRYPT:
@@ -1535,6 +2808,13 @@ static bool funcion_usa_boveda(TACInst *i) {
 static bool construir_una_vez(TACList *tac) {
     liberar_construccion();
     lista = tac;
+    instrucciones_reordenadas = 0;
+    temporales_asignados_registro = 0;
+    renombradas = 0;
+    temporales_derramados = 0;
+    dependencias_war = 0;
+    dependencias_waw = 0;
+    asignacion_iniciar(tac);
     hubo_error = false;
     usa_div = usa_scribe_int = usa_scribe_txt = usa_dic = false;
     n_bundles = n_etqs = n_etqs_dato = n_notas = 0;
@@ -1608,20 +2888,38 @@ static bool construir_una_vez(TACList *tac) {
         for (int r = 0; r < 16; r++) listo[r] = 0;
         listo_flags = 0;
         cache_limpiar();
+        cargas_temporales_emitidas = 0;
+        stores_temporales_emitidos = 0;
 
         nota("functio %s", func);
         registrar_etiqueta(func);
         emitir_prologo();
 
-        for (TACInst *j = i->next; j != NULL && j->op != TAC_FUNC_END; j = j->next) {
+        int posicion = 0;
+        for (TACInst *j = i->next; j != NULL && j->op != TAC_FUNC_END;
+             j = j->next, posicion++) {
+            tac_actual = j;
+            tac_posicion_actual = posicion;
             linea_fuente_actual = j->linea;
             columna_fuente_actual = j->columna;
             emitir_inst(j);
         }
+        tac_actual = NULL;
+        if (asignacion_habilitada)
+            registrar_accesos_temporales(accesos_asignados,
+                                         &n_accesos_asignados, func);
+        else
+            registrar_accesos_temporales(accesos_base,
+                                         &n_accesos_base, func);
         linea_fuente_actual = columna_fuente_actual = 0;
     }
     }
 
+    if (!hubo_error) {
+        paquete_vaciar();
+        calendarizar_programa();
+    }
+    asignacion_terminar();
     return !hubo_error;
 }
 
@@ -1689,7 +2987,8 @@ static bool construir_programa(TACList *tac) {
 
     /* El aviso va aqui y no en cada pasada: la relajacion construye varias
      * veces y si no se repetiria una vez por pasada. */
-    if (inicio_seguro >= 0 && n_bundles - inicio_seguro > SEC_BUNDLES) {
+    if (!medicion_referencia && inicio_seguro >= 0 &&
+        n_bundles - inicio_seguro > SEC_BUNDLES) {
         diag_advertencia("W008", 0, 1, 1,
                          "el codigo que usa la boveda ocupa %d bundles y la region "
                          "segura tiene %d: parte quedaria afuera y la sesion se cerraria",
@@ -1701,11 +3000,16 @@ static bool construir_programa(TACList *tac) {
      * se puede cargar: novac_image.py lo rechaza al armar la imagen. Conviene
      * decirlo aqui, que es donde se ve el tamano, y no al final de la cadena.
      */
-    if (n_bundles > IMEM_BUNDLES) {
-        diag_advertencia("W009", 0, 1, 1,
-                         "el programa ocupa %d bundles y la IMEM de CERBERO tiene "
-                         "%d: no se podra cargar en el procesador",
-                         n_bundles, IMEM_BUNDLES);
+    if (!medicion_referencia && n_bundles > IMEM_BUNDLES) {
+        if (ejecutable_requiere_imem)
+            diag_error("E410", 0, 1, 1,
+                       "el ejecutable ocupa %d bundles; el limite de IMEM es %d",
+                       n_bundles, IMEM_BUNDLES);
+        else
+            diag_advertencia("W009", 0, 1, 1,
+                             "el programa ocupa %d bundles y la IMEM de CERBERO tiene "
+                             "%d: no se podra cargar en el procesador",
+                             n_bundles, IMEM_BUNDLES);
     }
 
     return ok;
@@ -1729,8 +3033,6 @@ static bool construir_programa(TACList *tac) {
  * se entra a esa funcion. En una funcion recursiva, la segunda llamada queda
  * un marco mas abajo, la tercera dos, y asi.
  */
-#define MAX_FUNCS 256
-
 typedef struct {
     const char *nombre;
     TACInst *cuerpo;     /* primera instruccion, para volver a medirla */
@@ -1784,7 +3086,9 @@ static void propagar_bases(TACList *tac) {
 
 bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
     if (tac == NULL || st == NULL) return false;
+    asignacion_habilitada = nivel_opt >= 2;
     lista = tac;
+    asignacion_iniciar(tac);
     n_fns = 0;
     for (TACInst *i = tac->head; i != NULL; i = i->next) {
         if (i->op != TAC_FUNC_BEGIN || i->result == NULL) continue;
@@ -1805,8 +3109,7 @@ bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
 
         for (const TACSimbolo *s = tac->simbolos; s != NULL; s = s->next) {
             if (s->funcion == NULL || strcmp(s->funcion, func) != 0) continue;
-            symtab_set_frame_offset(st, func, s->nombre,
-                                    desplazamiento_simbolo(s));
+            symtab_set_frame_offset(st, s->id, desplazamiento_simbolo(s));
         }
     }
 
@@ -1820,11 +3123,12 @@ bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
         medir_funcion(fns[k].cuerpo);
         for (const TACSimbolo *s = tac->simbolos; s != NULL; s = s->next) {
             if (s->funcion == NULL || strcmp(s->funcion, fns[k].nombre) != 0) continue;
-            symtab_set_data_address(st, fns[k].nombre, s->nombre,
+            symtab_set_data_address(st, s->id,
                                     (uint32_t)(fns[k].base + desplazamiento_simbolo(s)));
         }
     }
 
+    asignacion_terminar();
     bool ok = construir_programa(tac);
     if (ok) {
         for (TACInst *i = tac->head; i != NULL; i = i->next) {
@@ -1842,9 +3146,74 @@ bool codegen_update_symbol_layout(TACList *tac, SymbolTable *st) {
     return ok;
 }
 
+bool codegen_print_allocation(TACList *tac, FILE *out) {
+    if (tac == NULL || out == NULL) return false;
+    lista = tac;
+    asig_salida = out;
+    asignacion_habilitada = true;
+    asignacion_iniciar(tac);
+    bool ok = true;
+    for (TACInst *i = tac->head; i != NULL; i = i->next) {
+        if (i->op != TAC_FUNC_BEGIN || i->result == NULL) continue;
+        func = i->result;
+        medir_funcion(i->next);
+    }
+    asignacion_terminar();
+    asig_salida = NULL;
+    if (!ok) {
+        asignacion_habilitada = true;
+        return false;
+    }
+
+    memset(accesos_base, 0, sizeof(accesos_base));
+    memset(accesos_asignados, 0, sizeof(accesos_asignados));
+    n_accesos_base = n_accesos_asignados = 0;
+    cargas_temporales_emitidas = stores_temporales_emitidos = 0;
+    asignacion_habilitada = false;
+    medicion_referencia = true;
+    ok = construir_programa(tac);
+    medicion_referencia = false;
+    guardar_estadisticas();
+    liberar_todo();
+    if (!ok) {
+        asignacion_habilitada = true;
+        return false;
+    }
+
+    cargas_temporales_emitidas = stores_temporales_emitidos = 0;
+    asignacion_habilitada = true;
+    ok = construir_programa(tac);
+    guardar_estadisticas();
+    liberar_todo();
+
+    int cargas_ahorradas = 0, stores_ahorrados = 0;
+    int cargas_adicionales = 0, stores_adicionales = 0;
+    for (int i = 0; i < n_accesos_asignados; i++) {
+        const AccesosTemporales *base =
+            buscar_accesos_temporales(accesos_base, n_accesos_base,
+                                      accesos_asignados[i].funcion);
+        int delta_cargas = (base != NULL ? base->cargas : 0) -
+                           accesos_asignados[i].cargas;
+        int delta_stores = (base != NULL ? base->stores : 0) -
+                           accesos_asignados[i].stores;
+        if (delta_cargas > 0) cargas_ahorradas += delta_cargas;
+        else cargas_adicionales -= delta_cargas;
+        if (delta_stores > 0) stores_ahorrados += delta_stores;
+        else stores_adicionales -= delta_stores;
+    }
+    fprintf(out, "Cargas de pila evitadas: %d; stores de pila evitados: %d\n",
+            cargas_ahorradas, stores_ahorrados);
+    if (cargas_adicionales > 0 || stores_adicionales > 0)
+        fprintf(out, "Accesos adicionales: %d cargas; %d stores\n",
+                cargas_adicionales, stores_adicionales);
+    asignacion_habilitada = true;
+    return ok && !ferror(out);
+}
+
 bool codegen_generate_vliw(TACList *tac, SymbolTable *st, FILE *out) {
     (void)st;
     if (tac == NULL || out == NULL) return false;
+    asignacion_habilitada = nivel_opt >= 2;
     sal = out;
     bool ok = construir_programa(tac);
 
@@ -1863,6 +3232,413 @@ bool codegen_generate_vliw(TACList *tac, SymbolTable *st, FILE *out) {
     imprimir_codigo_texto();
     imprimir_tabla_etiquetas();
     fprintf(out, "\n// fin del programa\n");
+    guardar_estadisticas();
+    liberar_todo();
+    return ok;
+}
+
+bool codegen_measure_vliw(TACList *tac, CodegenEstadisticas *out) {
+    char *texto = NULL;
+    size_t largo = 0;
+    FILE *memoria = open_memstream(&texto, &largo);
+    if (memoria == NULL) return false;
+
+    bool referencia_anterior = medicion_referencia;
+    medicion_referencia = true;
+    bool ok = codegen_generate_vliw(tac, NULL, memoria);
+    if (fclose(memoria) != 0) ok = false;
+    medicion_referencia = referencia_anterior;
+    free(texto);
+
+    if (ok && out != NULL) codegen_estadisticas(out);
+    return ok;
+}
+
+typedef struct {
+    bool valido;
+    int registro;
+    uint32_t valor;
+} SimEscrituraRegistro;
+
+typedef struct {
+    int z;
+    int n;
+    int c;
+    int v;
+} SimBanderas;
+
+typedef struct {
+    uint32_t registros[16];
+    uint32_t memoria[16384];
+    SimEscrituraRegistro pendientes[3][4];
+    SimBanderas banderas;
+    SimBanderas banderas_pendientes[3];
+    bool banderas_validas[3];
+} SimEstado;
+
+static void sim_programar_registro(SimEstado *e, uint64_t ciclo,
+                                   int registro, uint32_t valor) {
+    int indice = (int)((ciclo + 3) % 3);
+    for (int i = 0; i < 4; i++) {
+        if (!e->pendientes[indice][i].valido) {
+            e->pendientes[indice][i].valido = true;
+            e->pendientes[indice][i].registro = registro;
+            e->pendientes[indice][i].valor = valor;
+            return;
+        }
+    }
+}
+
+static void sim_programar_banderas(SimEstado *e, uint64_t ciclo,
+                                   SimBanderas banderas) {
+    int indice = (int)((ciclo + 3) % 3);
+    e->banderas_pendientes[indice] = banderas;
+    e->banderas_validas[indice] = true;
+}
+
+static void sim_actualizar(SimEstado *e, uint64_t ciclo) {
+    int indice = (int)(ciclo % 3);
+    for (int i = 0; i < 4; i++) {
+        if (!e->pendientes[indice][i].valido) continue;
+        e->registros[e->pendientes[indice][i].registro] =
+            e->pendientes[indice][i].valor;
+        e->pendientes[indice][i].valido = false;
+    }
+    if (e->banderas_validas[indice]) {
+        e->banderas = e->banderas_pendientes[indice];
+        e->banderas_validas[indice] = false;
+    }
+}
+
+static uint32_t sim_inmediato(long valor) {
+    uint32_t v = (uint32_t)valor & 0x7ffffu;
+    if ((v & 0x40000u) != 0) v |= 0xfff80000u;
+    return v;
+}
+
+static int sim_buscar_etiqueta(const char *nombre) {
+    for (int i = 0; i < n_etqs; i++)
+        if (strcmp(etqs[i].nombre, nombre) == 0) return etqs[i].bundle;
+    return -1;
+}
+
+static void sim_comparar(SimBanderas *b, uint32_t a, uint32_t c) {
+    uint32_t diferencia = a - c;
+    b->z = diferencia == 0;
+    b->n = (int)(diferencia >> 31);
+    b->c = a < c;
+    b->v = (int)(((a ^ c) & (a ^ diferencia)) >> 31);
+}
+
+static bool sim_condicion(const char *condicion, const SimBanderas *b) {
+    if (strcmp(condicion, "al") == 0) return true;
+    if (strcmp(condicion, "eq") == 0) return b->z != 0;
+    if (strcmp(condicion, "ne") == 0) return b->z == 0;
+    if (strcmp(condicion, "lt") == 0) return (b->n ^ b->v) != 0;
+    if (strcmp(condicion, "ge") == 0) return (b->n ^ b->v) == 0;
+    if (strcmp(condicion, "ltu") == 0) return b->c != 0;
+    if (strcmp(condicion, "geu") == 0) return b->c == 0;
+    return false;
+}
+
+static bool sim_ejecutar_alu(SimEstado *e, const char *texto, uint64_t ciclo,
+                            char *motivo, size_t cap_motivo) {
+    char op[32], etiqueta_destino[96];
+    int rd, rs1, rs2;
+    long inmediato;
+    uint32_t a, b, resultado = 0;
+    bool escribe = false;
+
+    if (sscanf(texto, "%31s r%d, #&%95s", op, &rd, etiqueta_destino) == 3 &&
+        strcmp(op, "movi") == 0) {
+        int destino = sim_buscar_etiqueta(etiqueta_destino);
+        if (rd < 0 || rd >= 16 || destino < 0) goto instruccion_desconocida;
+        sim_programar_registro(e, ciclo, rd, (uint32_t)destino * 16u);
+        return true;
+    }
+
+    if (sscanf(texto, "%31s r%d, r%d, r%d", op, &rd, &rs1, &rs2) == 4) {
+        if (rd < 0 || rd >= 16 || rs1 < 0 || rs1 >= 16 ||
+            rs2 < 0 || rs2 >= 16) goto instruccion_desconocida;
+        a = e->registros[rs1];
+        b = e->registros[rs2];
+        if (strcmp(op, "add") == 0) resultado = a + b;
+        else if (strcmp(op, "sub") == 0) resultado = a - b;
+        else if (strcmp(op, "mul") == 0) resultado = a * b;
+        else if (strcmp(op, "and") == 0) resultado = a & b;
+        else if (strcmp(op, "or") == 0) resultado = a | b;
+        else if (strcmp(op, "xor") == 0) resultado = a ^ b;
+        else if (strcmp(op, "sll") == 0) resultado = a << (b & 31u);
+        else if (strcmp(op, "srl") == 0) resultado = a >> (b & 31u);
+        else if (strcmp(op, "sra") == 0) resultado = (uint32_t)((int32_t)a >> (b & 31u));
+        else goto instruccion_desconocida;
+        escribe = true;
+    } else if (sscanf(texto, "%31s r%d, r%d, #%ld", op, &rd, &rs1,
+                      &inmediato) == 4) {
+        if (rd < 0 || rd >= 16 || rs1 < 0 || rs1 >= 16)
+            goto instruccion_desconocida;
+        a = e->registros[rs1];
+        b = sim_inmediato(inmediato);
+        if (strcmp(op, "addi") == 0) resultado = a + b;
+        else if (strcmp(op, "subi") == 0) resultado = a - b;
+        else if (strcmp(op, "andi") == 0) resultado = a & b;
+        else if (strcmp(op, "ori") == 0) resultado = a | b;
+        else if (strcmp(op, "xori") == 0) resultado = a ^ b;
+        else if (strcmp(op, "slli") == 0) resultado = a << ((uint32_t)inmediato & 31u);
+        else if (strcmp(op, "srli") == 0) resultado = a >> ((uint32_t)inmediato & 31u);
+        else if (strcmp(op, "srai") == 0)
+            resultado = (uint32_t)((int32_t)a >> ((uint32_t)inmediato & 31u));
+        else if (strcmp(op, "roli") == 0) {
+            unsigned int n = (unsigned int)inmediato & 31u;
+            resultado = n == 0 ? a : (a << n) | (a >> (32u - n));
+        } else goto instruccion_desconocida;
+        escribe = true;
+    } else if (sscanf(texto, "%31s r%d, r%d", op, &rd, &rs1) == 3) {
+        if (rd < 0 || rd >= 16 || rs1 < 0 || rs1 >= 16)
+            goto instruccion_desconocida;
+        if (strcmp(op, "cmp") == 0 || strcmp(op, "test") == 0) {
+            SimBanderas nuevas = {0};
+            a = e->registros[rd];
+            b = e->registros[rs1];
+            if (strcmp(op, "cmp") == 0) sim_comparar(&nuevas, a, b);
+            else {
+                uint32_t v = a & b;
+                nuevas.z = v == 0;
+                nuevas.n = (int)(v >> 31);
+            }
+            sim_programar_banderas(e, ciclo, nuevas);
+            return true;
+        }
+        a = e->registros[rs1];
+        if (strcmp(op, "mov") == 0) resultado = a;
+        else if (strcmp(op, "neg") == 0) resultado = 0u - a;
+        else if (strcmp(op, "not") == 0) resultado = ~a;
+        else goto instruccion_desconocida;
+        escribe = true;
+    } else if (sscanf(texto, "%31s r%d, #%ld", op, &rd, &inmediato) == 3) {
+        if (rd < 0 || rd >= 16) goto instruccion_desconocida;
+        if (strcmp(op, "movi") == 0) {
+            resultado = sim_inmediato(inmediato);
+        } else if (strcmp(op, "movh") == 0) {
+            resultado = (e->registros[rd] & 0xffffu) |
+                        (((uint32_t)inmediato & 0xffffu) << 16);
+        } else if (strcmp(op, "cmpi") == 0 || strcmp(op, "testi") == 0) {
+            a = e->registros[rd];
+            b = sim_inmediato(inmediato);
+            SimBanderas nuevas = {0};
+            if (strcmp(op, "cmpi") == 0) {
+                sim_comparar(&nuevas, a, b);
+            } else {
+                uint32_t v = a & b;
+                nuevas.z = v == 0;
+                nuevas.n = (int)(v >> 31);
+            }
+            sim_programar_banderas(e, ciclo, nuevas);
+            return true;
+        } else goto instruccion_desconocida;
+        escribe = true;
+    } else {
+        goto instruccion_desconocida;
+    }
+
+    if (escribe) sim_programar_registro(e, ciclo, rd, resultado);
+    return true;
+
+instruccion_desconocida:
+    snprintf(motivo, cap_motivo, "instruccion ALU no soportada: %.80s", texto);
+    return false;
+}
+
+static bool sim_ejecutar_lsu(SimEstado *e, const char *texto, uint64_t ciclo,
+                            char *motivo, size_t cap_motivo) {
+    char op[32];
+    int registro, base;
+    long desplazamiento;
+    uint32_t direccion;
+    if (sscanf(texto, "%31s r%d, #%ld(r%d)", op, &registro,
+               &desplazamiento, &base) != 4 ||
+        registro < 0 || registro >= 16 || base < 0 || base >= 16) {
+        snprintf(motivo, cap_motivo, "instruccion LSU no soportada: %.80s", texto);
+        return false;
+    }
+    direccion = e->registros[base] + (uint32_t)desplazamiento;
+    if (strcmp(op, "lw") != 0 && strcmp(op, "sw") != 0) {
+        snprintf(motivo, cap_motivo, "instruccion LSU no soportada: %.80s", texto);
+        return false;
+    }
+    if ((direccion & 3u) != 0 || direccion > 65532u) {
+        snprintf(motivo, cap_motivo, "direccion de memoria invalida: 0x%08x",
+                 direccion);
+        return false;
+    }
+    if (strcmp(op, "lw") == 0)
+        sim_programar_registro(e, ciclo, registro, e->memoria[direccion >> 2]);
+    else
+        e->memoria[direccion >> 2] = e->registros[registro];
+    return true;
+}
+
+static bool sim_ejecutar_salto(SimEstado *e, const char *texto, uint64_t ciclo,
+                               int pc, int *destino, bool *tomado,
+                               bool *detener, char *motivo,
+                               size_t cap_motivo) {
+    char op[32], argumento[96];
+    const char *condicion;
+    *tomado = false;
+    *detener = false;
+    if (sscanf(texto, "%31s %95s", op, argumento) < 1) return true;
+    if (strcmp(op, "halt") == 0) {
+        *detener = true;
+        return true;
+    }
+    if (strcmp(op, "br.auth") == 0) {
+        snprintf(motivo, cap_motivo, "saltos AUTH requieren soporte de boveda");
+        return false;
+    }
+    if (strncmp(op, "br.", 3) != 0 && strncmp(op, "jal.", 4) != 0 &&
+        strncmp(op, "jr.", 3) != 0 && strncmp(op, "jalr.", 5) != 0) {
+        snprintf(motivo, cap_motivo, "instruccion BRU no soportada: %.80s", texto);
+        return false;
+    }
+    condicion = strchr(op, '.');
+    if (condicion == NULL || !sim_condicion(condicion + 1, &e->banderas)) {
+        if (condicion != NULL &&
+            strcmp(condicion + 1, "al") != 0 &&
+            strcmp(condicion + 1, "eq") != 0 &&
+            strcmp(condicion + 1, "ne") != 0 &&
+            strcmp(condicion + 1, "lt") != 0 &&
+            strcmp(condicion + 1, "ge") != 0 &&
+            strcmp(condicion + 1, "ltu") != 0 &&
+            strcmp(condicion + 1, "geu") != 0) {
+            snprintf(motivo, cap_motivo, "condicion BRU no soportada: %.80s", texto);
+            return false;
+        }
+        return true;
+    }
+
+    if (strncmp(op, "jr.", 3) == 0 || strncmp(op, "jalr.", 5) == 0) {
+        int registro;
+        if (sscanf(argumento, "r%d", &registro) != 1 ||
+            registro < 0 || registro >= 16) {
+            snprintf(motivo, cap_motivo, "registro de salto invalido: %.80s", texto);
+            return false;
+        }
+        uint32_t dir = e->registros[registro];
+        if ((dir & 15u) != 0 || dir / 16u >= (uint32_t)n_bundles) {
+            snprintf(motivo, cap_motivo, "destino de salto invalido: 0x%08x", dir);
+            return false;
+        }
+        *destino = (int)(dir / 16u);
+        if (strncmp(op, "jalr.", 5) == 0)
+            sim_programar_registro(e, ciclo, 15, (uint32_t)(pc + 2) * 16u);
+        *tomado = true;
+        return true;
+    }
+
+    int destino_etiqueta = sim_buscar_etiqueta(argumento);
+    if (destino_etiqueta < 0 || destino_etiqueta >= n_bundles) {
+        snprintf(motivo, cap_motivo, "etiqueta de salto desconocida: %.80s", argumento);
+        return false;
+    }
+    *destino = destino_etiqueta;
+    if (strncmp(op, "jal.", 4) == 0)
+        sim_programar_registro(e, ciclo, 15, (uint32_t)(pc + 2) * 16u);
+    *tomado = true;
+    return true;
+}
+
+static bool sim_ejecutar(SimEstado *e, CodegenSimulacion *out) {
+    const uint64_t limite = 10000000;
+    uint64_t ciclo = 0;
+    int pc = 0, destino_pendiente = -1;
+
+    for (int b = 0; b < n_bundles; b++) {
+        if (prog[b].s[S_CRP] != NULL) {
+            snprintf(out->motivo, sizeof(out->motivo),
+                     "slot CRP no soportado: %.80s", prog[b].s[S_CRP]);
+            return true;
+        }
+    }
+
+    while (ciclo < limite) {
+        if (pc < 0 || pc >= n_bundles) {
+            snprintf(out->motivo, sizeof(out->motivo),
+                     "el flujo salio de la IMEM en el bundle %d", pc);
+            return true;
+        }
+        sim_actualizar(e, ciclo);
+        const Bundle *b = &prog[pc];
+        int destino = -1;
+        bool salto_tomado = false, detener = false;
+
+        if (b->s[S_ALU0] != NULL &&
+            !sim_ejecutar_alu(e, b->s[S_ALU0], ciclo,
+                              out->motivo, sizeof(out->motivo))) return true;
+        if (b->s[S_ALU1] != NULL &&
+            !sim_ejecutar_alu(e, b->s[S_ALU1], ciclo,
+                              out->motivo, sizeof(out->motivo))) return true;
+        if (b->s[S_LSU] != NULL &&
+            !sim_ejecutar_lsu(e, b->s[S_LSU], ciclo,
+                              out->motivo, sizeof(out->motivo))) return true;
+        if (b->s[S_BRU] != NULL &&
+            !sim_ejecutar_salto(e, b->s[S_BRU], ciclo, pc, &destino,
+                                &salto_tomado, &detener,
+                                out->motivo, sizeof(out->motivo))) return true;
+
+        if (detener) {
+            out->bundles_ejecutados++;
+            out->instrucciones++;
+            out->soportado = true;
+            out->ciclos = out->bundles_ejecutados + 1;
+            return true;
+        }
+
+        for (int s = 0; s < 5; s++)
+            if (b->s[s] != NULL) out->instrucciones++;
+        out->bundles_ejecutados++;
+
+        if (destino_pendiente >= 0) {
+            pc = destino_pendiente;
+            destino_pendiente = -1;
+        } else {
+            pc++;
+            if (salto_tomado) destino_pendiente = destino;
+        }
+        ciclo++;
+    }
+
+    snprintf(out->motivo, sizeof(out->motivo),
+             "se excedio el limite de %llu bundles ejecutados",
+             (unsigned long long)limite);
+    return true;
+}
+
+bool codegen_simular_vliw(TACList *tac, CodegenSimulacion *out) {
+    SimEstado estado;
+    if (tac == NULL || out == NULL) return false;
+    memset(out, 0, sizeof(*out));
+    memset(&estado, 0, sizeof(estado));
+    asignacion_habilitada = nivel_opt >= 2;
+    sal = NULL;
+    bool ok = construir_programa(tac);
+    if (!ok) {
+        guardar_estadisticas();
+        liberar_todo();
+        return false;
+    }
+    if (buscar_etiqueta("__inicio") < 0) {
+        snprintf(out->motivo, sizeof(out->motivo),
+                 "el programa no tiene funcion principale");
+        guardar_estadisticas();
+        liberar_todo();
+        return true;
+    }
+    for (int i = 0; i < datos_largo; i++) {
+        unsigned int direccion = (unsigned int)datos_base + (unsigned int)i;
+        if (direccion < sizeof(estado.memoria))
+            ((unsigned char *)estado.memoria)[direccion] = datos[i];
+    }
+    ok = sim_ejecutar(&estado, out);
     guardar_estadisticas();
     liberar_todo();
     return ok;
@@ -2274,6 +4050,7 @@ static void codificar_bundle(int b, unsigned char *dest) {
 bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out) {
     (void)st;
     if (tac == NULL || out == NULL) return false;
+    asignacion_habilitada = nivel_opt >= 2;
     sal = NULL;
     bool ok = construir_programa(tac);
     if (!ok) {
@@ -2282,7 +4059,7 @@ bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out) {
         return false;
     }
     if (buscar_etiqueta("__inicio") < 0) {
-        diag_error("E405", 0, 1, 1,
+        diag_error("E405", 1, 1, 1,
                    "no hay 'principale': no se pueden mostrar paquetes ejecutables");
         guardar_estadisticas();
     liberar_todo();
@@ -2317,6 +4094,49 @@ bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out) {
     return ok;
 }
 
+bool codegen_print_calendar(TACList *tac, SymbolTable *st, FILE *out) {
+    (void)st;
+    if (tac == NULL || out == NULL) return false;
+    asignacion_habilitada = nivel_opt >= 2;
+    sal = NULL;
+    bool ok = construir_programa(tac);
+    if (!ok) {
+        guardar_estadisticas();
+        liberar_todo();
+        return false;
+    }
+    if (buscar_etiqueta("__inicio") < 0) {
+        diag_error("E405", 1, 1, 1,
+                   "no hay 'principale': no se puede mostrar un calendario "
+                   "ejecutable");
+        guardar_estadisticas();
+        liberar_todo();
+        return false;
+    }
+
+    fprintf(out, "Calendario estatico: %d bundles\n", n_bundles);
+    for (int b = 0; b < n_bundles; b++) {
+        fprintf(out, "%04d", b);
+        if (prog[b].source_line > 0)
+            fprintf(out, " L%d:C%d", prog[b].source_line, prog[b].source_col);
+        for (int s = 0; s < 5; s++)
+            fprintf(out, " | S%d=%s", s,
+                    prog[b].s[s] != NULL ? prog[b].s[s] : "NOP");
+        fputc('\n', out);
+        for (int s = 0; s < 5; s++) {
+            if (prog[b].s[s] != NULL) continue;
+            fprintf(out, "     NOP S%d: %s\n", s,
+                    prog[b].razon_nop[s][0] != '\0'
+                        ? prog[b].razon_nop[s]
+                        : "sin operacion asignada a este slot");
+        }
+    }
+    ok = !hubo_error && diag_errores() == 0 && !ferror(out);
+    guardar_estadisticas();
+    liberar_todo();
+    return ok;
+}
+
 static void poner32(unsigned char *p, uint32_t v) {
     p[0] = (unsigned char)(v & 0xFF);
     p[1] = (unsigned char)((v >> 8) & 0xFF);
@@ -2327,12 +4147,20 @@ static void poner32(unsigned char *p, uint32_t v) {
 bool codegen_emitir_binario(TACList *tac, SymbolTable *st, FILE *out) {
     (void)st;
     if (tac == NULL || out == NULL) return false;
+    asignacion_habilitada = nivel_opt >= 2;
     sal = NULL;
+    ejecutable_requiere_imem = true;
     bool ok = construir_programa(tac);
+    ejecutable_requiere_imem = false;
+    if (n_bundles > IMEM_BUNDLES) {
+        guardar_estadisticas();
+        liberar_todo();
+        return false;
+    }
 
     int entrada = buscar_etiqueta("__inicio");
     if (entrada < 0) {
-        diag_error("E405", 0, 1, 1,
+        diag_error("E405", 1, 1, 1,
                    "no hay 'principale': un modulo de biblioteca no puede ser "
                    "el punto de entrada de un ejecutable");
         guardar_estadisticas();

@@ -1,0 +1,11 @@
+functio seleccionar(x : integer) -> integer {
+    si (x > 0) {
+        redde x + 3;
+    } aliter {
+        redde 9 - x;
+    }
+}
+
+functio principale() -> integer {
+    redde seleccionar(4) + seleccionar(0);
+}

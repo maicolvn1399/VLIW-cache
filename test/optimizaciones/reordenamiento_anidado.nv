@@ -1,0 +1,11 @@
+functio transformar(x : integer) -> integer {
+    si (x > 0) {
+        redde x * 2;
+    } aliter {
+        redde 0 - x;
+    }
+}
+
+functio principale() -> integer {
+    redde transformar(5) + transformar(0 - 3);
+}

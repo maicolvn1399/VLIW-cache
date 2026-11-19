@@ -155,6 +155,9 @@ module top #(
     output logic [31:0]                   perf_stall_wb,
     output logic [31:0]                   perf_stall_raw,
     output logic [31:0]                   perf_stall_evict, // <--- NUEVO [L2-04]
+    output logic [31:0]                   perf_inv_ejecutadas, // Iteracion 5, 5.2
+    output logic [31:0]                   perf_mem_accesos,    // Iteracion 5, 5.3
+    output logic [31:0]                   perf_mem_ciclos,     // Iteracion 5, 5.3
     // ---- Métricas de la cache L2 (Iteración 4) [ISSUE L2-05] --------------
     output logic [31:0]                   perf_l2_load_hit,
     output logic [31:0]                   perf_l2_load_miss,
@@ -635,6 +638,7 @@ module top #(
   // ---- Eventos para los contadores -------------------------------------------
   logic ev_load_hit, ev_load_miss, ev_store_hit, ev_store_miss;
   logic ev_stall_miss, ev_stall_wb, ev_stall_raw;
+  logic ev_inv_ejecutada;   // Iteracion 5, seccion 5.2
 
   // Un acceso de verdad a memoria. Las dos senales ya vienen filtradas por la
   // LSU: solo se encienden con el bundle valido, con un opcode de acceso y sin
@@ -672,7 +676,8 @@ module top #(
       .ev_store_miss (ev_store_miss),
       .ev_stall_miss (ev_stall_miss),
       .ev_stall_wb   (ev_stall_wb),
-      .ev_stall_raw  (ev_stall_raw)
+      .ev_stall_raw  (ev_stall_raw),
+      .ev_inv_ejecutada (ev_inv_ejecutada)
   );
 
 // ---- Write buffer L1-D -> L2 -----------------------------------------------
@@ -1083,6 +1088,9 @@ module top #(
       .ev_stall_miss  (ev_stall_miss),
       .ev_stall_wb    (ev_stall_wb),
       .ev_stall_raw   (ev_stall_raw),
+      .ev_inv_ejecutada (ev_inv_ejecutada),
+      .ev_mem_acceso    (mem_sys_inicia_rd || mem_sys_inicia_wr),
+      .ev_mem_ocupado   (mem_sys_ocupado),
       .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
       .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
       .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
@@ -1105,7 +1113,10 @@ module top #(
       .stall_por_miss (perf_stall_miss),
       .stall_por_wb   (perf_stall_wb),
       .stall_por_raw  (perf_stall_raw),
-      .stall_por_evict(perf_stall_evict), // <--- NUEVO [L2-04]: Salida hacia el testbench
+      .stall_por_evict(perf_stall_evict),
+      .inv_ejecutadas (perf_inv_ejecutadas),
+      .mem_accesos    (perf_mem_accesos),
+      .mem_ciclos     (perf_mem_ciclos), // <--- NUEVO [L2-04]: Salida hacia el testbench
       .l2_load_hit    (perf_l2_load_hit),   // <--- NUEVO [L2-05]
       .l2_load_miss   (perf_l2_load_miss),  // <--- NUEVO [L2-05]
       .l2_store_hit   (perf_l2_store_hit),  // <--- NUEVO [L2-05]

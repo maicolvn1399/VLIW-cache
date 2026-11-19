@@ -106,6 +106,8 @@ module tb_programa;
   // Contadores de la cache L2 (Iteracion 4)
   logic [31:0]              hw_l2_ldh, hw_l2_ldm, hw_l2_sth, hw_l2_stm;
   logic [31:0]              hw_st_evict;
+  // Iteracion 5, secciones 5.2 y 5.3 del enunciado
+  logic [31:0]              hw_inv, hw_mem_acc, hw_mem_cic;
   logic [31:0]              hw_st_miss, hw_st_wb, hw_st_raw;
   logic                     hw_drenada;
   logic                     hw_desbordado;
@@ -143,6 +145,9 @@ module tb_programa;
       .perf_l2_store_hit   (hw_l2_sth),
       .perf_l2_store_miss  (hw_l2_stm),
       .perf_stall_evict    (hw_st_evict),
+      .perf_inv_ejecutadas (hw_inv),
+      .perf_mem_accesos    (hw_mem_acc),
+      .perf_mem_ciclos     (hw_mem_cic),
       .mem_drenada         (hw_drenada),
       .perf_desbordado     (hw_desbordado)
   );
@@ -734,6 +739,33 @@ module tb_programa;
       $fdisplay(salida, "      escrituras: fallos         %10d", hw_l2_stm);
       $fdisplay(salida, "    tasa de aciertos             %9.2f%%",
                 (accesos_l2 == 0) ? 0.0 : 100.0 * aciertos_l2 / accesos_l2);
+
+      // ---- Invalidaciones hacia atras (seccion 5.2) ------------------------
+      // El enunciado las exige por haber elegido politica inclusiva: sirven
+      // para cuantificar cuanto le cuesta la inclusion al hit rate de L1-D.
+      // Cada una es una linea que L1 tenia y tuvo que soltar porque la L2 la
+      // expulso, asi que es un fallo futuro que la inclusion provoco.
+      $fdisplay(salida, "    invalidaciones hacia atras   %10d  (ejecutadas sobre L1-D)",
+                hw_inv);
+
+      // ---- Memoria principal (seccion 5.3) ---------------------------------
+      // El ancho de banda teorico maximo del modelo es una linea cada T_mem
+      // ciclos. La utilizacion es la fraccion del tiempo que el bus estuvo de
+      // verdad transfiriendo.
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  memoria principal");
+      $fdisplay(salida, "    accesos (lineas completas)   %10d", hw_mem_acc);
+      $fdisplay(salida, "    ciclos en transferencias     %10d", hw_mem_cic);
+      $fdisplay(salida, "    ciclos por acceso            %10.1f  (T_mem = %0d)",
+                (hw_mem_acc == 0) ? 0.0 : 1.0 * hw_mem_cic / hw_mem_acc, `T_MEM);
+      // La ventana correcta incluye el vaciado de la L2, que ocurre DESPUES
+      // del HALT: ahi el bus sigue transfiriendo. Medir contra los ciclos del
+      // programa daria mas de 100 %, que es imposible y delataria el error.
+      $fdisplay(salida, "    utilizacion del bus          %9.2f%%  (del reset al drenado completo)",
+                ((hw_ciclos + guarda_drenado) == 0) ? 0.0 :
+                100.0 * hw_mem_cic / (hw_ciclos + guarda_drenado));
+      $fdisplay(salida, "      ventana medida             %10d ciclos  (%0d del programa + %0d de drenado)",
+                hw_ciclos + guarda_drenado, hw_ciclos, guarda_drenado);
 
       // El desglose tiene que sumar el contador global de stalls. Si no suma,
       // alguna causa se esta contando dos veces o falta una.

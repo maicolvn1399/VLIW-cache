@@ -92,6 +92,7 @@ module tb_l1_dcache;
   // ---- Contadores ---------------------------------------------------------------
   logic ev_load_hit, ev_load_miss, ev_store_hit, ev_store_miss;
   logic ev_stall_miss, ev_stall_wb, ev_stall_raw;
+  logic ev_inv_ejecutada;   // Iteracion 5, seccion 5.2
 
   l1_dcache dut (
       .clk           (clk),
@@ -122,7 +123,8 @@ module tb_l1_dcache;
       .ev_store_miss (ev_store_miss),
       .ev_stall_miss (ev_stall_miss),
       .ev_stall_wb   (ev_stall_wb),
-      .ev_stall_raw  (ev_stall_raw)
+      .ev_stall_raw  (ev_stall_raw),
+      .ev_inv_ejecutada (ev_inv_ejecutada)
   );
 
   // ---------------------------------------------------------------------------

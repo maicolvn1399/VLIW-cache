@@ -24,6 +24,8 @@
 #include "tac.h"
 #include "diag.h"
 
+int nivel_opt = 0;
+
 /* Codigos de DataType tal como los guarda la decoracion. */
 #define T_INTEGER 0
 #define T_VERITAS 1
@@ -58,6 +60,20 @@ static char *dup_str(const char *s) {
     if (d == NULL) sin_memoria();
     memcpy(d, s, n);
     return d;
+}
+
+static char *nombre_simbolo_tac(const char *nombre, const Decor *d) {
+    if (nombre == NULL) return NULL;
+    if (d == NULL || (d->clase != DEC_VAR && d->clase != DEC_PARAM) ||
+        d->simbolo_id == 0)
+        return dup_str(nombre);
+
+    size_t capacidad = strlen(nombre) + 32;
+    char *interno = malloc(capacidad);
+    if (interno == NULL) sin_memoria();
+    snprintf(interno, capacidad, "@s%llu:%s",
+             (unsigned long long)d->simbolo_id, nombre);
+    return interno;
 }
 
 void tac_reset_contadores(void) {
@@ -170,13 +186,14 @@ static void registrar_simbolo(TACList *l, const char *nombre, const Decor *d,
                               int es_param, int posicion) {
     if (nombre == NULL || d == NULL) return;
     for (TACSimbolo *x = l->simbolos; x != NULL; x = x->next)
-        if (strcmp(x->nombre, nombre) == 0 && funcion_actual != NULL &&
+        if (x->id == d->simbolo_id && funcion_actual != NULL &&
             x->funcion != NULL && strcmp(x->funcion, funcion_actual) == 0)
-            return;                      /* ya esta: un bloque interno */
+            return;
 
     TACSimbolo *s = calloc(1, sizeof(TACSimbolo));
     if (s == NULL) sin_memoria();
-    s->nombre = dup_str(nombre);
+    s->nombre = nombre_simbolo_tac(nombre, d);
+    s->id = d->simbolo_id;
     s->funcion = dup_str(funcion_actual ? funcion_actual : "global");
     s->es_param = es_param;
     s->posicion = posicion;
@@ -202,6 +219,14 @@ const TACSimbolo *tac_buscar_simbolo(const TACList *l, const char *funcion,
         return x;
     }
     return NULL;
+}
+
+const char *tac_nombre_fuente(const char *nombre) {
+    if (nombre == NULL || nombre[0] != '@' || nombre[1] != 's') return nombre;
+    const char *p = nombre + 2;
+    if (*p < '0' || *p > '9') return nombre;
+    do { p++; } while (*p >= '0' && *p <= '9');
+    return *p == ':' ? p + 1 : nombre;
 }
 
 static Nodo *buscar_hijo(Nodo *n, TipoNodo t) {
@@ -280,8 +305,10 @@ static char *indice_lineal(Nodo *idx_nodo, TACList *l, Nodo **nodo_base) {
         char *paso;
         if (abierto || cols <= 0) {
             paso = tac_new_temp();
-            TACInst *ln = tac_append(l, TAC_LEN, paso,
-                                     nb != NULL ? nb->texto : NULL, NULL);
+            char *nombre = nombre_simbolo_tac(nb ? nb->texto : NULL,
+                                              nb ? nb->dec : NULL);
+            TACInst *ln = tac_append(l, TAC_LEN, paso, nombre, NULL);
+            free(nombre);
             ln->aux = 1;
             con_pos(ln, idx);
         } else {
@@ -315,7 +342,9 @@ static char *indice_lineal(Nodo *idx_nodo, TACList *l, Nodo **nodo_base) {
     char *lim = NULL;
     if (abierto || filas <= 0) {
         lim = tac_new_temp();
-        TACInst *ln = tac_append(l, TAC_LEN, lim, base->texto, NULL);
+        char *nombre = nombre_simbolo_tac(base->texto, base->dec);
+        TACInst *ln = tac_append(l, TAC_LEN, lim, nombre, NULL);
+        free(nombre);
         ln->aux = 0;
         con_pos(ln, idx);
     } else {
@@ -388,7 +417,9 @@ static int emitir_param(Nodo *arg, TACList *l, int pos) {
     if (arg != NULL && arg->dec != NULL && arg->dec->dims > 0 &&
         arg->tipo == NODO_IDENT) {
         char *base = tac_new_temp();
-        con_pos(tac_append(l, TAC_ADDR, base, arg->texto, NULL), arg);
+        char *nombre = nombre_simbolo_tac(arg->texto, arg->dec);
+        con_pos(tac_append(l, TAC_ADDR, base, nombre, NULL), arg);
+        free(nombre);
         tac_append(l, TAC_PARAM, NULL, base, NULL)->aux = pos++;
         free(base);
 
@@ -396,7 +427,9 @@ static int emitir_param(Nodo *arg, TACList *l, int pos) {
             char *t;
             if (arg->dec->abierto) {
                 t = tac_new_temp();
-                TACInst *ln = tac_append(l, TAC_LEN, t, arg->texto, NULL);
+                char *nombre = nombre_simbolo_tac(arg->texto, arg->dec);
+                TACInst *ln = tac_append(l, TAC_LEN, t, nombre, NULL);
+                free(nombre);
                 ln->aux = d;
                 con_pos(ln, arg);
             } else {
@@ -426,14 +459,18 @@ static char *generar_intrinseca(Nodo *e, TACList *l, const char *nombre) {
     if (strcmp(nombre, "longitudo") == 0) {
         char *t = tac_new_temp();
         if (a1 != NULL && a1->tipo == NODO_IDENT) {
-            TACInst *i = tac_append(l, TAC_LEN, t, a1->texto, NULL);
+            char *nombre = nombre_simbolo_tac(a1->texto, a1->dec);
+            TACInst *i = tac_append(l, TAC_LEN, t, nombre, NULL);
+            free(nombre);
             i->aux = 0;
             con_pos(i, e);
         } else if (a1 != NULL && a1->tipo == NODO_INDICE) {
             /* longitudo(m[0]) es el tamano de la segunda dimension. */
             Nodo *b = a1->hijo;
-            const char *nb = (b && b->tipo == NODO_IDENT) ? b->texto : NULL;
+            char *nb = (b && b->tipo == NODO_IDENT)
+                ? nombre_simbolo_tac(b->texto, b->dec) : NULL;
             TACInst *i = tac_append(l, TAC_LEN, t, nb, NULL);
+            free(nb);
             i->aux = 1;
             con_pos(i, e);
         } else {
@@ -514,7 +551,9 @@ static char *generar_intrinseca(Nodo *e, TACList *l, const char *nombre) {
         char *bloque = NULL;
         if (a1 != NULL && a1->tipo == NODO_IDENT) {
             bloque = tac_new_temp();
-            con_pos(tac_append(l, TAC_ADDR, bloque, a1->texto, NULL), e);
+            char *nombre = nombre_simbolo_tac(a1->texto, a1->dec);
+            con_pos(tac_append(l, TAC_ADDR, bloque, nombre, NULL), e);
+            free(nombre);
         } else {
             bloque = generar_expr(a1, l);
         }
@@ -575,9 +614,10 @@ static char *generar_llamada(Nodo *e, TACList *l) {
         pos = emitir_param(a, l, pos);
     int palabras = pos - 1;
 
-    /* Nombre decorado del modulo, como pide el documento: modulo$simbolo. */
+    /* La notacion `modulo_simbolo` mantiene nombres de etiqueta validos para el
+     * ensamblador CERBERO, que no acepta '$'. */
     char destino[160];
-    if (e->modulo != NULL) snprintf(destino, sizeof(destino), "%s$%s", e->modulo, nombre);
+    if (e->modulo != NULL) snprintf(destino, sizeof(destino), "%s_%s", e->modulo, nombre);
     else snprintf(destino, sizeof(destino), "%s", nombre);
 
     /* El temporal de retorno se reserva para llamadas con valor; la fase
@@ -629,17 +669,20 @@ static char *generar_expr(Nodo *e, TACList *l) {
                 return const_en_temp(l, e->dec->valor, e->linea, e->columna);
             if (e->modulo != NULL) {
                 char buf[160];
-                snprintf(buf, sizeof(buf), "%s$%s", e->modulo, e->texto);
+                snprintf(buf, sizeof(buf), "%s_%s", e->modulo, e->texto);
                 return dup_str(buf);
             }
-            return dup_str(e->texto);
+            return nombre_simbolo_tac(e->texto, e->dec);
         }
 
         case NODO_INDICE: {
             Nodo *base = NULL;
             char *idx = indice_lineal(e, l, &base);
             char *t = tac_new_temp();
-            con_pos(tac_append(l, TAC_LOAD, t, base ? base->texto : NULL, idx), e);
+            char *nombre = nombre_simbolo_tac(base ? base->texto : NULL,
+                                              base ? base->dec : NULL);
+            con_pos(tac_append(l, TAC_LOAD, t, nombre, idx), e);
+            free(nombre);
             free(idx);
             return t;
         }
@@ -721,11 +764,15 @@ static void generar_sent(Nodo *s, TACList *l) {
             Nodo *init = tn ? tn->sig : NULL;
             if (init == NULL) break;
             if (init->tipo == NODO_LISTA_VALORES) {
-                generar_lista(init, l, s->texto, 0);
+                char *nombre = nombre_simbolo_tac(s->texto, s->dec);
+                generar_lista(init, l, nombre, 0);
+                free(nombre);
             } else {
                 char *v = generar_expr(init, l);
                 if (v != NULL) {
-                    con_pos(tac_append(l, TAC_ASSIGN, s->texto, v, NULL), s);
+                    char *nombre = nombre_simbolo_tac(s->texto, s->dec);
+                    con_pos(tac_append(l, TAC_ASSIGN, nombre, v, NULL), s);
+                    free(nombre);
                     free(v);
                 }
             }
@@ -746,13 +793,18 @@ static void generar_sent(Nodo *s, TACList *l) {
                 Nodo *base = NULL;
                 char *idx = indice_lineal(dest, l, &base);
                 char *v = generar_expr(val, l);
-                con_pos(tac_append(l, TAC_STORE, base ? base->texto : NULL, idx, v), s);
+                char *nombre = nombre_simbolo_tac(base ? base->texto : NULL,
+                                                  base ? base->dec : NULL);
+                con_pos(tac_append(l, TAC_STORE, nombre, idx, v), s);
+                free(nombre);
                 free(idx);
                 free(v);
             } else {
                 char *v = generar_expr(val, l);
                 if (v != NULL) {
-                    con_pos(tac_append(l, TAC_ASSIGN, dest->texto, v, NULL), s);
+                    char *nombre = nombre_simbolo_tac(dest->texto, dest->dec);
+                    con_pos(tac_append(l, TAC_ASSIGN, nombre, v, NULL), s);
+                    free(nombre);
                     free(v);
                 }
             }
@@ -991,44 +1043,55 @@ static bool es_binaria(TACOp op) {
 void tac_print_inst(FILE *out, const TACInst *i) {
     if (out == NULL || i == NULL) return;
     if (es_binaria(i->op)) {
-        fprintf(out, "    %s = %s %s %s\n", i->result, i->arg1,
-                tac_op_nombre(i->op), i->arg2);
+        fprintf(out, "    %s = %s %s %s\n", tac_nombre_fuente(i->result),
+                tac_nombre_fuente(i->arg1), tac_op_nombre(i->op),
+                tac_nombre_fuente(i->arg2));
         return;
     }
     switch (i->op) {
         case TAC_NEG: case TAC_BITNOT: case TAC_NOT:
-            fprintf(out, "    %s = %s %s\n", i->result,
-                    tac_op_nombre(i->op), i->arg1); break;
+            fprintf(out, "    %s = %s %s\n", tac_nombre_fuente(i->result),
+                    tac_op_nombre(i->op), tac_nombre_fuente(i->arg1)); break;
         case TAC_ASSIGN:
-            fprintf(out, "    %s = %s\n", i->result, i->arg1); break;
+            fprintf(out, "    %s = %s\n", tac_nombre_fuente(i->result),
+                    tac_nombre_fuente(i->arg1)); break;
         case TAC_CONST:
             fprintf(out, "    %s = #%ld\n", i->result, i->valor); break;
         case TAC_STR:
-            fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
+            fprintf(out, "    %s = &%s\n", i->result,
+                    tac_nombre_fuente(i->arg1)); break;
         case TAC_LOAD:
-            fprintf(out, "    %s = %s[%s]\n", i->result, i->arg1, i->arg2); break;
+            fprintf(out, "    %s = %s[%s]\n", i->result,
+                    tac_nombre_fuente(i->arg1), tac_nombre_fuente(i->arg2)); break;
         case TAC_STORE:
-            fprintf(out, "    %s[%s] = %s\n", i->result, i->arg1, i->arg2); break;
+            fprintf(out, "    %s[%s] = %s\n", tac_nombre_fuente(i->result),
+                    tac_nombre_fuente(i->arg1), tac_nombre_fuente(i->arg2)); break;
         case TAC_ADDR:
-            fprintf(out, "    %s = &%s\n", i->result, i->arg1); break;
+            fprintf(out, "    %s = &%s\n", i->result,
+                    tac_nombre_fuente(i->arg1)); break;
         case TAC_LEN:
-            fprintf(out, "    %s = longitudo %s, dim %d\n", i->result, i->arg1, i->aux); break;
+            fprintf(out, "    %s = longitudo %s, dim %d\n", i->result,
+                    tac_nombre_fuente(i->arg1), i->aux); break;
         case TAC_CHECK:
-            fprintf(out, "    check %s, %s\n", i->arg1, i->arg2); break;
+            fprintf(out, "    check %s, %s\n", tac_nombre_fuente(i->arg1),
+                    tac_nombre_fuente(i->arg2)); break;
         case TAC_LABEL:
             fprintf(out, "%s:\n", i->result); break;
         case TAC_GOTO:
             fprintf(out, "    goto %s\n", i->result); break;
         case TAC_IF_FALSE:
-            fprintf(out, "    ifFalse %s goto %s\n", i->arg1, i->result); break;
+            fprintf(out, "    ifFalse %s goto %s\n",
+                    tac_nombre_fuente(i->arg1), i->result); break;
         case TAC_IF_TRUE:
-            fprintf(out, "    ifTrue %s goto %s\n", i->arg1, i->result); break;
+            fprintf(out, "    ifTrue %s goto %s\n",
+                    tac_nombre_fuente(i->arg1), i->result); break;
         case TAC_FUNC_BEGIN:
             fprintf(out, "\nfunctio %s:\n", i->result); break;
         case TAC_FUNC_END:
             fprintf(out, "fin %s\n", i->result); break;
         case TAC_PARAM:
-            fprintf(out, "    param %s  (posicion %d)\n", i->arg1, i->aux); break;
+            fprintf(out, "    param %s  (posicion %d)\n",
+                    tac_nombre_fuente(i->arg1), i->aux); break;
         case TAC_CALL:
             if (i->result) fprintf(out, "    %s = call %s, %d\n", i->result, i->arg1, i->aux);
             else           fprintf(out, "    call %s, %d\n", i->arg1, i->aux);
@@ -1038,19 +1101,23 @@ void tac_print_inst(FILE *out, const TACInst *i) {
         case TAC_RET:
             fprintf(out, "    ret\n"); break;
         case TAC_RET_VAL:
-            fprintf(out, "    ret %s\n", i->arg1); break;
+            fprintf(out, "    ret %s\n", tac_nombre_fuente(i->arg1)); break;
         case TAC_AUTHW:
-            fprintf(out, "    authw #%d, %s\n", i->aux, i->arg1); break;
+            fprintf(out, "    authw #%d, %s\n", i->aux,
+                    tac_nombre_fuente(i->arg1)); break;
         case TAC_VAULT_LOGIN:
             fprintf(out, "    vault.login\n"); break;
         case TAC_VAULT_LOGOUT:
             fprintf(out, "    vault.logout\n"); break;
         case TAC_KSETW:
-            fprintf(out, "    vault.store #%ld, #%d, %s\n", i->valor, i->aux, i->arg2); break;
+            fprintf(out, "    vault.store #%ld, #%d, %s\n", i->valor, i->aux,
+                    tac_nombre_fuente(i->arg2)); break;
         case TAC_FEISTEL:
-            fprintf(out, "    feistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
+            fprintf(out, "    feistel %s, #%ld, #%d\n",
+                    tac_nombre_fuente(i->arg1), i->valor, i->aux); break;
         case TAC_FEISTEL_DECRYPT:
-            fprintf(out, "    desfeistel %s, #%ld, #%d\n", i->arg1, i->valor, i->aux); break;
+            fprintf(out, "    desfeistel %s, #%ld, #%d\n",
+                    tac_nombre_fuente(i->arg1), i->valor, i->aux); break;
         case TAC_HALT:
             fprintf(out, "    halt\n"); break;
         default:

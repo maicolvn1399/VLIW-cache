@@ -1,0 +1,14 @@
+functio principale() -> integer {
+    varia i : integer = 0;
+    varia suma : integer = 0;
+    varia primera : integer = 1;
+    dum (i < 3) {
+        suma += i;
+        si (primera == 1) {
+            primera = 0;
+        } aliter {
+            i = i + 1;
+        }
+    }
+    redde suma + primera;
+}

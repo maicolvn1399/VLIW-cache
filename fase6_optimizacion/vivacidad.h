@@ -104,6 +104,9 @@ int viv_indice(const VivacidadFuncion *vf, const char *nombre);
 /* 1 si el nombre esta vivo a la salida del bloque b. */
 int viv_viva_a_la_salida(const VivacidadFuncion *vf, int b, const char *nombre);
 
+/* 1 si el nombre esta vivo a la entrada del bloque b. */
+int viv_viva_a_la_entrada(const VivacidadFuncion *vf, int b, const char *nombre);
+
 /* 1 si el nombre nunca puede considerarse muerto (escapa o es global). */
 int viv_intocable(const VivacidadFuncion *vf, const char *nombre);
 

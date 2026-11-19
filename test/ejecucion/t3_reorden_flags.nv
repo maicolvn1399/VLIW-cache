@@ -1,0 +1,9 @@
+functio principale() -> integer {
+    varia a : integer = 7;
+    varia b : integer = 3;
+    varia c : integer = 0;
+    si (a > b) {
+        c = a - b;
+    }
+    redde c;
+}

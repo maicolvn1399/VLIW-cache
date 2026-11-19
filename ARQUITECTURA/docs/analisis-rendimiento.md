@@ -249,13 +249,91 @@ El razonamiento de cada política está en [jerarquia-memoria.md](jerarquia-memo
 4. **`recorrido_cache.s` es un microbenchmark, no carga real.** Sirve para separar geometrías y validar contadores contra aritmética; no para estimar el rendimiento de un programa de verdad. Y las tasas de los otros ocho son casi enteramente función de los fallos de arranque, así que dicen poco sobre la caché y bastante sobre los programas. Mejorarlo pide benchmarks con localidad real, candidato natural para la Iteración 5 con los programas que genere NOVA.
 5. **La frecuencia es un modelo, no una medición física.** Los 53 ciclos salen del modelo de 25 MHz con ráfaga de 8 palabras. No hay síntesis ni medición en silicio, así que el número es consistente dentro del proyecto pero no es una latencia de DRAM real.
 
+
+---
+
+## 11. Iteración 5: patrones de acceso a memoria
+
+La sección 7.1.5 del enunciado pide evaluar el sistema con benchmarks de distintos patrones de acceso: secuencial, aleatorio y stride, correlacionando hit rates, IPC, stalls y AMAT con las decisiones de diseño.
+
+### 11.1 El experimento
+
+Tres programas que hacen **exactamente 1024 lecturas cada uno** sobre la misma jerarquía. Lo único que cambia es el orden en que tocan la memoria, así que toda diferencia es atribuible al patrón.
+
+| Programa | Paso | Qué toca | Qué mide |
+|---|---|---|---|
+| `patron_secuencial.s` | 4 B | 128 líneas (4 KB), ocho accesos por línea | localidad espacial máxima |
+| `patron_aleatorio.s` | al azar | ~647 de 1024 líneas (32 KB) | localidad temporal accidental |
+| `patron_stride.s` | 32 B | 1024 líneas (32 KB), una vez cada una | sin localidad de ningún tipo |
+
+El paso del stride es exactamente el tamaño de línea, que es lo que anula por completo la localidad espacial: cada acceso estrena línea y traer la línea no sirve para nada más. El aleatorio recorre **la misma región de 32 KB que el stride**, así que los dos son directamente comparables y la única diferencia entre ellos es el orden.
+
+Dos de los tres tienen **oráculo exacto**, calculable sin simular: el secuencial falla 1024/8 = 128 veces (una por línea) y acierta las otras 896; el stride no puede acertar nunca, porque visita 1024 líneas distintas una sola vez. `tb_patrones.sv` los comprueba, con 17 casos.
+
+### 11.2 Resultados
+
+| | Secuencial | Aleatorio | Stride |
+|---|---|---|---|
+| Lecturas | 1024 | 1024 | 1024 |
+| Aciertos L1 | 896 | 132 | 0 |
+| Fallos L1 | 128 | 892 | 1024 |
+| **Tasa de aciertos L1** | **87,50 %** | **12,89 %** | **0,00 %** |
+| Tasa de aciertos L2 | 0,00 % | **25,42 %** | 0,00 % |
+| Penalidad medida | 63,0 ciclos | 49,0 | 63,0 |
+| **AMAT** | **8,93** | **43,69** | **64,00** |
+| Ciclos | 16 266 | 79 562 | 72 714 |
+| Ciclos de stall | 8064 | 43 711 | 64 512 |
+| IPC | 0,378 | 0,180 | 0,085 |
+| Accesos a memoria principal | 130 | 667 | 1026 |
+| Utilización del bus | 40,60 % | 43,45 % | 72,86 % |
+
+### 11.3 Qué dicen estos números
+
+**1. El patrón vale 4,5 veces en tiempo, con el mismo trabajo.** Secuencial y stride ejecutan el mismo número de bundles (8202) y las mismas instrucciones (6150): son el mismo programa con otro paso. Uno tarda 16 266 ciclos y el otro 72 714. Toda la diferencia son los 56 448 ciclos de stall adicionales, es decir memoria.
+
+**2. La decisión de línea de 32 bytes se valida sola.** El secuencial acierta 87,50 %, que es exactamente 7/8: un fallo trae ocho palabras y las siete siguientes salen gratis. Ese número no es una medición afortunada, es la definición de la línea. Y el stride, con paso igual a la línea, da 0,00 %: la misma decisión que le regala siete aciertos a uno le da cero al otro. **El tamaño de línea es una apuesta a la localidad espacial, y aquí se ve ganada y perdida en el mismo experimento.**
+
+**3. La L2 solo sirve donde hay reuso, y la medición lo aísla.** La L2 atrapa el 25,42 % de los fallos de L1 en el aleatorio, y **0,00 % en los otros dos**. La razón es que los fallos del secuencial y del stride son todos de arranque: la línea se toca por primera vez, así que no está en ningún nivel. El aleatorio es el único que repite líneas, y cuando L1 ya las expulsó, la L2 las tiene. Eso se refleja en la penalidad: 49,0 ciclos contra 63,0, porque una cuarta parte de sus fallos cuesta 8 ciclos en vez de 53.
+
+**4. El aleatorio tarda más que el stride aunque acierta más.** Parece contradictorio y no lo es: su lazo gasta 35 bundles por iteración en el generador pseudoaleatorio, contra 8 del stride. Por eso su IPC (0,180) habla del generador y no del patrón. **Para comparar patrones hay que mirar AMAT y tasa de aciertos, que son por acceso; el IPC y los ciclos mezclan el costo del programa con el de la memoria.** Es una limitación del experimento que conviene decir antes de que la pregunten.
+
+**5. El bus se satura con el stride.** 72,86 % de utilización contra 40,60 % del secuencial. El stride es tráfico puro sin reuso: 1026 transferencias de línea para 1024 accesos útiles, es decir que trae 32 KB para usar 4 KB. **Siete de cada ocho bytes que cruzan el bus se descartan.** El secuencial trae los mismos 32 bytes por línea y usa los 32.
+
+**6. Una validación independiente que vale la pena.** El aleatorio tocó **667 líneas distintas**. La predicción teórica, por el problema del cumpleaños, es 1024 × (1 − 1/e) = **647**. Están dentro del 3 %, lo cual confirma a la vez que el generador dispersa de verdad y que el contador de accesos a memoria mide lo que dice medir. Ningún otro programa de la suite permite esa comprobación cruzada.
+
+### 11.4 Lo que costó la política inclusiva
+
+La sección 5.2 del enunciado exige contar las invalidaciones hacia atrás ejecutadas sobre L1-D cuando la política es inclusiva, para cuantificar su costo sobre el hit rate. El contador existe desde la Iteración 5 y el resultado es:
+
+| Patrón | Invalidaciones ejecutadas |
+|---|---|
+| Secuencial | 0 |
+| Aleatorio | 0 |
+| Stride | 0 |
+
+**Cero en los tres**, y la razón es estructural: la L2 tiene 512 líneas y la L1 tiene 128, así que la L2 casi nunca expulsa algo que la L1 todavía conserve. Con esa relación de tamaños, la inclusión no le cuesta nada al hit rate de L1-D.
+
+Es un resultado útil en los dos sentidos. A favor de la inclusiva, dice que su costo medido es nulo. En contra, dice que la garantía que mantiene tampoco se ejerce: en todo el conjunto de pruebas no hubo ni una invalidación que hiciera falta. Eso refuerza el argumento original de NINE, que es que la inclusión aquí resuelve un problema que no se presenta.
+
+### 11.5 Lo que falta: la integración con NOVA
+
+La Iteración 5 pide además correr los benchmarks bajo distintos niveles de optimización del compilador. Esa parte está pendiente y depende del equipo de CE1108.
+
+Lo que ya se sabe de la salida actual de NOVA, medido sobre una compilación real:
+
+- **Ocupación de 0,48 de 5 ranuras**, y ni un solo bundle con dos operaciones. Usa S0, S2 y S4; nunca S1 ni S3.
+- **44 % de las instrucciones que emite son accesos a memoria**, porque no asigna registros y baja cada temporal al marco de pila.
+
+El segundo dato es el que conecta con esta sección: un programa que baja cada temporal a memoria tiene un patrón de acceso parecido al secuencial sobre el marco, que es el caso bueno, pero multiplica la cuenta de accesos. La medición que hay que hacer en la Iteración 5 es si la asignación de registros reduce más ciclos que el empaquetado, y la respuesta esperable, dada la sección 6 de este documento, es que sí: empaquetar reduce bundles pero no accesos, y aquí los accesos son el 44 %.
+
 ---
 
 ## 10. Cómo reproducir
 
 ```bash
 cd src/build
-make clean && make all     # 35 unidades, 2070 casos, 0 fallos esperados
+make clean && make all     # 40 unidades, 2129 casos, 0 fallos esperados
+make patrones              # los tres patrones de la Iteracion 5
 make ejemplos              # 41 casos, contadores contra aritmética
 make metricas              # las tablas de las secciones 4, 5 y 6
 make correr PROG=recorrido_cache.s MOSTRAR=0x100 PALABRAS=2

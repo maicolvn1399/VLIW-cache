@@ -1,0 +1,11 @@
+functio principale() -> integer {
+    varia cero : integer = 0;
+    varia acumulado : integer = cero;
+    varia base : integer = 4;
+    varia copia : integer = base;
+    varia suma : integer = copia + 3;
+    varia total : integer = suma * 2;
+    scribe(acumulado);
+    scribe(total);
+    redde total;
+}

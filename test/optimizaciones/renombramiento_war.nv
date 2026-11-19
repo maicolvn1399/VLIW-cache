@@ -1,0 +1,22 @@
+functio seleccionar(x : integer) -> integer {
+    redde x + 1;
+}
+
+functio principale() -> integer {
+    varia datos : integer[4] = {2, 4, 6, 8};
+    varia indice : integer = seleccionar(1);
+    varia base : integer = datos[indice];
+    varia total : integer = base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    scribe(total);
+    redde total;
+}

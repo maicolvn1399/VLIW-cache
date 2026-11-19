@@ -1,0 +1,9 @@
+functio principale() -> integer {
+    varia i : integer = 0;
+    varia suma : integer = 0;
+    dum (i < 20) {
+        suma += 100 / (i + 1);
+        i += 1;
+    }
+    redde suma;
+}

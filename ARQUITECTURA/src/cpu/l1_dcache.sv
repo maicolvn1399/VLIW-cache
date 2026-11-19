@@ -149,7 +149,16 @@ module l1_dcache (
     output logic                     ev_store_miss,
     output logic                     ev_stall_miss,   // ciclo perdido por miss
     output logic                     ev_stall_wb,     // ... por buffer lleno
-    output logic                     ev_stall_raw     // ... por conflicto RAW
+    output logic                     ev_stall_raw,    // ... por conflicto RAW
+
+    // Invalidacion hacia atras EJECUTADA sobre esta cache. El enunciado la
+    // exige en la seccion 5.2 cuando la politica de inclusion es inclusiva,
+    // para poder cuantificar cuanto le cuesta al hit rate de L1-D.
+    //
+    // Se pulsa solo cuando de verdad se invalida una linea presente, no cada
+    // vez que llega un aviso: la L2 avisa de toda victima valida suya, y la
+    // mayoria de esas lineas L1 ni siquiera las tiene.
+    output logic                     ev_inv_ejecutada
 );
 
   // ===========================================================================
@@ -370,6 +379,7 @@ module l1_dcache (
   assign ev_store_miss = (estado == ESPERA) && es_store && !acierto && completa;
 
   assign ev_stall_raw  = (estado == ESPERA) && espera_raw;
+  assign ev_inv_ejecutada = inv_req && (inv_hit_v0 || inv_hit_v1);
   assign ev_stall_wb   = (estado == ESPERA) && espera_buffer;
   assign ev_stall_miss = ((estado == ESPERA) && falla_lectura && !wb_conflicto)
                       || ((estado == LLENA)  && !mem_listo);

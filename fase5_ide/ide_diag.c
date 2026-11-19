@@ -42,15 +42,18 @@ static const char *visible(const char *ruta) {
 /* Emite un diagnostico capturado, enriquecido con el catalogo. */
 static void emitir_diagnostico(JsonW *j, const DiagRegistro *r, const char *ruta) {
     const EntradaCatalogo *cat = ide_catalogo_buscar(r->codigo);
+    int linea = r->linea > 0 ? r->linea : 1;
+    int columna = r->linea > 0 && r->columna > 0 ? r->columna : 1;
+    int largo = r->largo > 0 ? r->largo : 1;
 
     jw_obj_abrir(j);
     jw_cadena(j, "severidad", r->severidad);
     jw_cadena(j, "codigo", r->codigo);
     jw_cadena(j, "fase", ide_catalogo_fase(r->codigo));
     jw_cadena(j, "archivo", visible(ruta));
-    jw_entero(j, "linea", r->linea);
-    jw_entero(j, "columna", r->columna);
-    jw_entero(j, "largo", r->largo);
+    jw_entero(j, "linea", linea);
+    jw_entero(j, "columna", columna);
+    jw_entero(j, "largo", largo);
     jw_cadena(j, "mensaje", r->mensaje);
     if (cat != NULL) {
         jw_cadena(j, "titulo", cat->titulo);
@@ -207,7 +210,7 @@ int ide_diagnosticar(const char *ruta, int con_tokens, JsonW *j) {
                  * se escribe, igual que un error de tipos, en vez de aparecer
                  * recien al compilar con -O1.
                  */
-                muerto_eliminar(layout, NULL, 1);
+                muerto_eliminar(layout, NULL, 1, 1);
                 tac_free(layout);
             }
         }

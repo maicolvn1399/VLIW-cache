@@ -8,11 +8,17 @@ CPU=${4:-../src/cpu}
 OBJECT_SOURCE=${5:-}
 ROT_SECRET=${6:-}
 MAX_CYCLES=${7:-20000}
+EXPECTED_OUT=${8-}
+CHECK_EXPECTED_OUT=0
+[ "$#" -lt 8 ] || CHECK_EXPECTED_OUT=1
 # Banderas extra para el compilador, por ejemplo OPT=-O1. Sirven para correr la
 # misma bateria con y sin optimizacion: el valor de retorno que espera cada
 # prueba tiene que ser el mismo, que es la definicion de que optimizar no
 # cambia el programa.
 OPT=${OPT:-}
+# Ruta donde dejar el volcado de contadores de rendimiento (Iteracion 5). Vacia
+# por omision: las baterias existentes no cambian de salida.
+METRICAS=${METRICAS:-}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/nova-rtl.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
@@ -40,4 +46,30 @@ iverilog "$@" \
     -DCERBERO_DMEM_FILE="\"$TMP/dmem.hex\"" \
     -s tb_nova_rtl -o "$TMP/sim.vvp" \
     "$CPU"/*.sv test/tb_nova_rtl.sv
-vvp -n "$TMP/sim.vvp" "+EXPECTED=$EXPECTED"
+set -- "+EXPECTED=$EXPECTED"
+if [ "$CHECK_EXPECTED_OUT" -eq 1 ]; then
+    set -- "$@" "+EXPECTED_OUT=$EXPECTED_OUT"
+fi
+if [ -n "$METRICAS" ]; then
+    set -- "$@" "+METRICAS=$METRICAS"
+fi
+if resultado=$(vvp -n "$TMP/sim.vvp" "$@" 2>&1); then
+    :
+else
+    estado=$?
+    printf '%s\n' "$resultado"
+    exit "$estado"
+fi
+printf '%s\n' "$resultado"
+
+ciclos=$(printf '%s\n' "$resultado" |
+    awk '/ciclos RTL:/ { print $3; exit }')
+instrucciones=$(printf '%s\n' "$resultado" |
+    awk '/instrucciones RTL:/ { print $3; exit }')
+if [ -z "$ciclos" ] || [ -z "$instrucciones" ] || [ "$ciclos" -eq 0 ]; then
+    echo "Fallo: no se obtuvieron contadores RTL para $SOURCE" >&2
+    exit 1
+fi
+ipc=$(awk -v i="$instrucciones" -v c="$ciclos" \
+    'BEGIN { printf "%.3f", i / c }')
+printf '  IPC RTL: %s\n' "$ipc"

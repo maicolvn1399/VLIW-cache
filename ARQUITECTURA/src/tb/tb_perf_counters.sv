@@ -62,6 +62,12 @@ module tb_perf_counters;
   logic ev_l2_store_hit  = 1'b0;
   logic ev_l2_store_miss = 1'b0;
 
+  // Iteracion 5: invalidaciones hacia atras y memoria principal
+  logic ev_inv_ejecutada = 1'b0;
+  logic ev_mem_acceso    = 1'b0;
+  logic ev_mem_ocupado   = 1'b0;
+  logic [31:0] inv_ejecutadas, mem_accesos, mem_ciclos;
+
   // Salidas de los contadores L2 de la instancia ancha
   logic [31:0] l2_load_hit, l2_load_miss, l2_store_hit, l2_store_miss;
   logic [31:0] stall_por_evict;
@@ -89,6 +95,9 @@ module tb_perf_counters;
       .ev_l2_load_miss  (ev_l2_load_miss),
       .ev_l2_store_hit  (ev_l2_store_hit),
       .ev_l2_store_miss (ev_l2_store_miss),
+      .ev_inv_ejecutada (ev_inv_ejecutada),
+      .ev_mem_acceso    (ev_mem_acceso),
+      .ev_mem_ocupado   (ev_mem_ocupado),
 
       .ciclos         (ciclos),
       .bundles        (bundles),
@@ -112,6 +121,9 @@ module tb_perf_counters;
       .l2_store_hit   (l2_store_hit),
       .l2_store_miss  (l2_store_miss),
       .stall_por_evict(stall_por_evict),
+      .inv_ejecutadas (inv_ejecutadas),
+      .mem_accesos    (mem_accesos),
+      .mem_ciclos     (mem_ciclos),
       .desbordado     (desbordado)
   );
 
@@ -149,6 +161,9 @@ module tb_perf_counters;
       .ev_l2_load_miss  (ev_l2_load_miss),
       .ev_l2_store_hit  (ev_l2_store_hit),
       .ev_l2_store_miss (ev_l2_store_miss),
+      .ev_inv_ejecutada (ev_inv_ejecutada),
+      .ev_mem_acceso    (ev_mem_acceso),
+      .ev_mem_ocupado   (ev_mem_ocupado),
 
       .ciclos         (ciclos_chico),
       .bundles        (bundles_chico),
@@ -569,6 +584,52 @@ module tb_perf_counters;
     // Ninguno de los cuatro de hit/miss se movio con el stall
     check("y el stall no toco l2_load_hit",   l2_load_hit,   3);
     check("ni l2_store_miss",                 l2_store_miss, 4);
+
+    // -------------------------------------------------------------------------
+    $display("");
+    $display("[I5] los contadores que exige la seccion 5 del enunciado");
+    // -------------------------------------------------------------------------
+    // 5.2 pide contar las invalidaciones hacia atras ejecutadas sobre L1-D
+    // cuando la politica es inclusiva, y 5.3 pide accesos a memoria principal,
+    // ciclos de transferencia y utilizacion del ancho de banda. Los dos
+    // primeros son contadores; la utilizacion se deriva de ellos en el informe.
+
+    reiniciar();
+
+    // Tres invalidaciones ejecutadas
+    repeat (3) begin
+      ev_inv_ejecutada = 1'b1;
+      @(posedge clk); #1;
+      ev_inv_ejecutada = 1'b0;
+      @(posedge clk); #1;
+    end
+    check("inv_ejecutadas conto las tres", inv_ejecutadas, 3);
+    check("y no toco los accesos a memoria", mem_accesos, 0);
+
+    // Dos accesos a memoria principal
+    repeat (2) begin
+      ev_mem_acceso = 1'b1;
+      @(posedge clk); #1;
+      ev_mem_acceso = 1'b0;
+      @(posedge clk); #1;
+    end
+    check("mem_accesos conto los dos", mem_accesos, 2);
+    check("y las invalidaciones no se movieron", inv_ejecutadas, 3);
+
+    // Diez ciclos de bus ocupado. Es un contador de CICLOS, no de eventos, asi
+    // que se sostiene en alto.
+    ev_mem_ocupado = 1'b1;
+    repeat (10) begin
+      @(posedge clk); #1;
+    end
+    ev_mem_ocupado = 1'b0;
+    @(posedge clk); #1;
+    check("mem_ciclos conto los diez ciclos sostenidos", mem_ciclos, 10);
+
+    // Con los dos se puede derivar la utilizacion del ancho de banda, que es
+    // lo que pide 5.3: ciclos ocupados sobre ciclos totales.
+    check("y hay con que calcular la utilizacion",
+          (mem_accesos > 0 && mem_ciclos > 0), 1'b1);
 
 `ifdef FORCE_FAIL
     check("caso inyectado a proposito", bundles, 32'hDEAD);

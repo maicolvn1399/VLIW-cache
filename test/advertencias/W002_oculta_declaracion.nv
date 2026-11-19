@@ -1,8 +1,22 @@
+functio usar(valor : integer) -> integer {
+    si (verum) {
+        varia valor : integer = 7;
+        scribe(valor);
+    }
+    redde valor;
+}
+
 functio principale() -> integer {
     varia a : integer = 1;
     si (a > 0) {
-        varia a : integer = 2;
-        scribe(a);
+        varia a : integer[2] = {2, 3};
+        scribe(a[1]);
     }
-    redde a;
+    scribe(a);
+    varia i : integer = 9;
+    per (varia i : integer = 0; i < 1; i += 1) {
+        scribe(i);
+    }
+    scribe(i);
+    redde usar(a);
 }

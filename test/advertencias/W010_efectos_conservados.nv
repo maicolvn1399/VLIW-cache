@@ -1,0 +1,10 @@
+functio calcular(divisor : integer, valores : integer[]) -> integer {
+    varia division_muerta : integer = 10 / divisor;
+    varia indice_muerto : integer = valores[divisor];
+    redde 0;
+}
+
+functio principale() -> integer {
+    varia valores : integer[1] = {7};
+    redde calcular(0, valores);
+}

@@ -1,0 +1,7 @@
+functio principale() -> integer {
+    varia i : integer = 0;
+    dum (i < 4) {
+        i = i + 1;
+    }
+    redde i;
+}

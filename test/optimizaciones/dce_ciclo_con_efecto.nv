@@ -1,0 +1,8 @@
+functio principale() -> integer {
+    varia i : integer = 0;
+    dum (i < 3) {
+        scribe(i);
+        i = i + 1;
+    }
+    redde 7;
+}

@@ -1,0 +1,20 @@
+functio semilla(x : integer) -> integer {
+    redde x + 3;
+}
+
+functio principale() -> integer {
+    varia base : integer = semilla(4);
+    varia total : integer = base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    scribe(total);
+    redde total;
+}

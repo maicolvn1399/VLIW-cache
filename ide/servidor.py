@@ -19,9 +19,11 @@ Uso:
 """
 
 import argparse
+import glob
 import http.server
 import json
 import os
+import re
 import shutil
 import socketserver
 import subprocess
@@ -39,6 +41,105 @@ WEB = os.path.join(AQUI, "web")
 # milisegundos; este tope solo existe para que un caso patologico no deje la
 # interfaz colgada esperando.
 TIEMPO_LIMITE = 20
+TIEMPO_LIMITE_RTL = 60
+DMEM_WORDS = 16384
+
+
+def leer_metricas(texto):
+    """Interpreta el formato comparativo producido por novac --metricas."""
+    secciones = re.split(r"^\s*(ANTES|DESPUES)\s*$", texto, flags=re.MULTILINE)
+    if len(secciones) < 5:
+        return None
+
+    def bloque_metricas(bloque):
+        patrones = {
+            "tac": r"instrucciones TAC:\s*(\d+)",
+            "instrucciones": r"instrucciones finales no-NOP:\s*(\d+)",
+            "bundles": r"bundles:\s*(\d+)",
+            "bytes": r"bytes de codigo:\s*(\d+)",
+            "ocupacion_pct": r"ocupacion:\s*([\d.]+)%",
+            "dependencias_war": r"dependencias WAR:\s*(\d+)",
+            "dependencias_waw": r"dependencias WAW:\s*(\d+)",
+            "nops_war": r"NOPs por dependencia WAR:\s*(\d+)",
+            "nops_waw": r"NOPs por dependencia WAW:\s*(\d+)",
+        }
+        valores = {}
+        for clave, patron in patrones.items():
+            m = re.search(patron, bloque)
+            if m is None:
+                return None
+            valores[clave] = float(m.group(1)) if clave == "ocupacion_pct" else int(m.group(1))
+        return valores
+
+    antes = bloque_metricas(secciones[2])
+    despues = bloque_metricas(secciones[4])
+    if antes is None or despues is None:
+        return None
+
+    tiempos = {}
+    for clave, patron in {
+        "fase_1_2": r"tiempo fase 1-2 \(lexico/sintactico\):\s*([\d.]+)",
+        "fase_3": r"tiempo fase 3 \(semantica/enlace\):\s*([\d.]+)",
+        "fase_4_tac": r"tiempo fase 4 \(generacion TAC\):\s*([\d.]+)",
+        "fase_4_backend": r"tiempo fase 4 \(backend VLIW\):\s*([\d.]+)",
+        "fase_6": r"tiempo fase 6 \(optimizacion\):\s*([\d.]+)",
+        "total": r"tiempo total de compilacion:\s*([\d.]+)",
+    }.items():
+        m = re.search(patron, texto)
+        if m is None:
+            return None
+        tiempos[clave] = float(m.group(1))
+
+    contadores = {}
+    for clave, patron in {
+        "eliminadas": r"^\s*eliminadas:\s*(\d+)",
+        "reordenadas": r"^\s*reordenadas:\s*(\d+)",
+        "renombradas": r"^\s*renombradas:\s*(\d+)",
+        "temporales_asignados_registro":
+            r"^\s*temporales asignados a registro:\s*(\d+)",
+        "derramadas": r"^\s*derramadas:\s*(\d+)",
+        "bucles": r"^\s*bucles desenrollados:\s*(\d+)",
+    }.items():
+        encontrados = re.findall(patron, texto, flags=re.MULTILINE)
+        if not encontrados:
+            return None
+        contadores[clave] = int(encontrados[-1])
+
+    def simulacion_ciclos(etiqueta):
+        m = re.search(
+            rf"^\s*{etiqueta}: ciclos estimados=(\d+); "
+            r"bundles ejecutados=(\d+); instrucciones no-NOP=(\d+); "
+            r"IPC estimado=([\d.]+)$",
+            texto, flags=re.MULTILINE,
+        )
+        if m is not None:
+            return {
+                "disponible": True,
+                "ciclos": int(m.group(1)),
+                "bundles": int(m.group(2)),
+                "instrucciones": int(m.group(3)),
+                "ipc": float(m.group(4)),
+            }
+        m = re.search(
+            rf"^\s*{etiqueta}: no soportado: (.+)$",
+            texto, flags=re.MULTILINE,
+        )
+        if m is not None:
+            return {"disponible": False, "motivo": m.group(1)}
+        return None
+
+    return {
+        "antes": antes,
+        "despues": despues,
+        "tiempos_ms": tiempos,
+        "contadores": contadores,
+        "ciclos_estimados": {
+            # No es -O0: es el TAC previo a la fase 6 pasado por el mismo
+            # backend que la corrida actual. Ver el comentario en main.c.
+            "antes": simulacion_ciclos(r"ANTES \(sin fase 6, mismo backend\)"),
+            "despues": simulacion_ciclos(r"DESPUES \(-O[012]\)"),
+        },
+    }
 
 
 class Nucleo:
@@ -73,15 +174,271 @@ class Nucleo:
             return {"error": f"respuesta de novaide ilegible: {e}",
                     "crudo": r.stdout[:2000]}
 
-    def compilar(self, ruta, modo, optimizar=False):
+    @staticmethod
+    def leer_volcado_dmem(ruta):
+        palabras = []
+        with open(ruta, encoding="ascii") as archivo:
+            for indice, linea in enumerate(archivo):
+                coincidencia = re.fullmatch(
+                    r"([0-9a-fA-F]{8})\s+([0-9a-fA-FxXzZ]{8})",
+                    linea.strip(),
+                )
+                if coincidencia is None:
+                    raise ValueError(
+                        f"formato invalido en la linea {indice + 1} del volcado"
+                    )
+
+                direccion = int(coincidencia.group(1), 16)
+                if direccion != indice * 4:
+                    raise ValueError(
+                        f"direccion inesperada en la linea {indice + 1}: "
+                        f"0x{direccion:04X}"
+                    )
+                valor = coincidencia.group(2).upper()
+                palabras.append({
+                    "direccion": f"0x{direccion:04X}",
+                    "valor": f"0x{valor}",
+                    "no_cero": valor != "00000000",
+                })
+
+        if len(palabras) != DMEM_WORDS:
+            raise ValueError(
+                f"el volcado contiene {len(palabras)} palabras; "
+                f"se esperaban {DMEM_WORDS}"
+            )
+        return palabras
+
+    def medir_ciclos_rtl(self, ruta, nivel_opt, incluir_dmem=False):
+        """Mide el fuente en el RTL y compara su resultado con -O0."""
+        iverilog = shutil.which("iverilog")
+        vvp = shutil.which("vvp")
+        if not iverilog or not vvp:
+            return {
+                "disponible": False,
+                "motivo": "se requieren iverilog y vvp para medir ciclos RTL",
+            }
+
+        cpu = os.path.join(self.raiz, "ARQUITECTURA", "src", "cpu")
+        if not os.path.isdir(cpu):
+            cpu = os.path.abspath(os.path.join(self.raiz, "..", "src", "cpu"))
+        fuentes_rtl = sorted(glob.glob(os.path.join(cpu, "*.sv")))
+        testbench = os.path.join(self.raiz, "test", "tb_nova_rtl.sv")
+        conversor = os.path.join(
+            self.raiz, "ARQUITECTURA", "tools", "novac_image.py")
+        if not fuentes_rtl or not os.path.isfile(testbench) or \
+                not os.path.isfile(conversor):
+            return {
+                "disponible": False,
+                "motivo": "no se encontro el RTL, el testbench o el conversor de imagen",
+            }
+
+        niveles = [0] if nivel_opt == 0 else [0, nivel_opt]
+        resultados = {}
+        advertencias = []
+        try:
+            with tempfile.TemporaryDirectory(prefix="nova_metricas_rtl_") as tmp:
+                for nivel in niveles:
+                    prefijo = "antes" if nivel == 0 else "despues"
+                    ejecutable = os.path.join(tmp, f"{prefijo}.nvx")
+                    imem = os.path.join(tmp, f"{prefijo}.imem.hex")
+                    dmem = os.path.join(tmp, f"{prefijo}.dmem.hex")
+                    simulacion = os.path.join(tmp, f"{prefijo}.vvp")
+                    volcado_dmem = (
+                        os.path.join(tmp, "dmem-final.txt")
+                        if incluir_dmem and nivel == nivel_opt else None
+                    )
+
+                    compilado = subprocess.run(
+                        [self.novac, f"-O{nivel}", ruta, "-o", ejecutable],
+                        capture_output=True, text=True, timeout=TIEMPO_LIMITE,
+                        cwd=self.raiz,
+                    )
+                    if compilado.stderr.strip():
+                        advertencias.append(compilado.stderr.strip())
+                    if compilado.returncode != 0:
+                        return {
+                            "disponible": False,
+                            "motivo": f"no se pudo generar el binario -O{nivel}: "
+                                      f"{compilado.stderr[-1000:]}",
+                        }
+
+                    convertido = subprocess.run(
+                        [sys.executable, conversor, ejecutable,
+                         "--imem", imem, "--dmem", dmem],
+                        capture_output=True, text=True, timeout=TIEMPO_LIMITE,
+                        cwd=self.raiz,
+                    )
+                    if convertido.stderr.strip():
+                        advertencias.append(convertido.stderr.strip())
+                    if convertido.returncode != 0:
+                        return {
+                            "disponible": False,
+                            "motivo": f"no se pudieron generar las imagenes RTL: "
+                                      f"{convertido.stderr[-1000:]}",
+                        }
+
+                    argumentos = [
+                        iverilog, "-g2012", "-Wall", "-Wno-timescale",
+                        "-I", cpu, "-DCERBERO_MAX_CYCLES=200000",
+                        f'-DCERBERO_IMEM_FILE="{imem}"',
+                        f'-DCERBERO_DMEM_FILE="{dmem}"',
+                        "-s", "tb_nova_rtl", "-o", simulacion,
+                    ] + fuentes_rtl + [testbench]
+                    compilacion_rtl = subprocess.run(
+                        argumentos, capture_output=True, text=True,
+                        timeout=TIEMPO_LIMITE_RTL, cwd=self.raiz,
+                    )
+                    if compilacion_rtl.stderr.strip():
+                        advertencias.append(compilacion_rtl.stderr.strip())
+                    if compilacion_rtl.returncode != 0:
+                        return {
+                            "disponible": False,
+                            "motivo": f"iverilog no pudo compilar el testbench: "
+                                      f"{compilacion_rtl.stderr[-1000:]}",
+                            "advertencias": advertencias,
+                        }
+
+                    argumentos_vvp = [
+                        vvp, "-n", simulacion,
+                        "+OMITIR_VERIFICACION_RETORNO",
+                    ]
+                    if volcado_dmem is not None:
+                        argumentos_vvp.append(f"+DMEM_DUMP={volcado_dmem}")
+                    corrida = subprocess.run(
+                        argumentos_vvp,
+                        capture_output=True, text=True,
+                        timeout=TIEMPO_LIMITE_RTL, cwd=self.raiz,
+                    )
+                    if corrida.stderr.strip():
+                        advertencias.append(corrida.stderr.strip())
+                    if corrida.returncode != 0:
+                        return {
+                            "disponible": False,
+                            "motivo": f"la simulacion -O{nivel} fallo: "
+                                      f"{(corrida.stderr or corrida.stdout)[-1000:]}",
+                            "advertencias": advertencias,
+                        }
+
+                    def entero(patron):
+                        coincidencia = re.search(patron, corrida.stdout)
+                        return int(coincidencia.group(1)) if coincidencia else None
+
+                    ciclos = entero(r"ciclos RTL:\s*(\d+)")
+                    instrucciones = entero(r"instrucciones RTL:\s*(\d+)")
+                    retorno = entero(r"retorno R6:\s*(-?\d+)")
+                    conteo_salida = entero(
+                        r"salida en DMEM del procesador \((\d+) valores\):")
+                    salida = [
+                        int(valor) for valor in re.findall(
+                            r"^\s+\[\d+\]\s+(-?\d+)\s+\(",
+                            corrida.stdout, flags=re.MULTILINE,
+                        )
+                    ]
+                    if ciclos is None or instrucciones is None or \
+                            retorno is None or conteo_salida is None or \
+                            len(salida) != conteo_salida or ciclos <= 0:
+                        return {
+                            "disponible": False,
+                            "motivo": f"la simulacion -O{nivel} no produjo "
+                                      "contadores RTL completos",
+                            "advertencias": advertencias,
+                        }
+                    resultados_nivel = {
+                        "ciclos": ciclos,
+                        "instrucciones": instrucciones,
+                        "ipc": round(instrucciones / ciclos, 3),
+                        "retorno": retorno,
+                        "salida": salida,
+                    }
+                    if volcado_dmem is not None:
+                        try:
+                            resultados_nivel["dmem"] = self.leer_volcado_dmem(
+                                volcado_dmem
+                            )
+                        except (OSError, ValueError) as e:
+                            return {
+                                "disponible": False,
+                                "motivo": f"no se pudo leer el volcado DMEM: {e}",
+                                "advertencias": advertencias,
+                            }
+                    resultados[prefijo] = resultados_nivel
+        except subprocess.TimeoutExpired as e:
+            return {
+                "disponible": False,
+                "motivo": f"la medicion RTL excedio el tiempo limite: {e.cmd}",
+                "advertencias": advertencias,
+            }
+        except OSError as e:
+            return {
+                "disponible": False,
+                "motivo": f"no se pudo ejecutar la medicion RTL: {e}",
+                "advertencias": advertencias,
+            }
+
+        antes = resultados["antes"]
+        despues = resultados.get("despues", antes)
+        if (antes["retorno"], antes["salida"]) != \
+                (despues["retorno"], despues["salida"]):
+            return {
+                "disponible": False,
+                "motivo": "la ejecucion optimizada difiere de -O0 en R6 o en "
+                          "la salida de scribe",
+                "antes": antes,
+                "despues": despues,
+                "advertencias": advertencias,
+            }
+        respuesta = {
+            "disponible": True,
+            "origen": "medido",
+            "antes": antes,
+            "despues": despues,
+            "advertencias": advertencias,
+        }
+        if incluir_dmem:
+            lado = "antes" if nivel_opt == 0 else "despues"
+            if "dmem" not in resultados[lado]:
+                return {
+                    "disponible": False,
+                    "motivo": "la simulacion no produjo el volcado DMEM",
+                    "advertencias": advertencias,
+                }
+            respuesta["dmem"] = resultados[lado]["dmem"]
+        return respuesta
+
+    def ejecutar_rtl(self, ruta, nivel_opt):
+        """Ejecuta el nivel elegido y devuelve salida y DMEM final."""
+        if nivel_opt not in (0, 1, 2):
+            return {"error": "nivel de optimizacion invalido; use 0, 1 o 2"}
+
+        medicion = self.medir_ciclos_rtl(
+            ruta, nivel_opt, incluir_dmem=True
+        )
+        if not medicion.get("disponible"):
+            return {
+                "error": medicion.get("motivo", "ejecucion RTL no disponible"),
+                "advertencias": medicion.get("advertencias", []),
+            }
+
+        lado = "antes" if nivel_opt == 0 else "despues"
+        resultado = medicion[lado]
+        return {
+            "nivel_opt": nivel_opt,
+            "comparado_con_o0": nivel_opt != 0,
+            "retorno": resultado["retorno"],
+            "scribe": resultado["salida"],
+            "ciclos": resultado["ciclos"],
+            "instrucciones": resultado["instrucciones"],
+            "ipc": resultado["ipc"],
+            "dmem": medicion["dmem"],
+        }
+
+    def compilar(self, ruta, modo, nivel_opt=0):
         """
         Corre el compilador de verdad sobre el archivo. Es lo que hace el boton
         de compilar: el IDE no simula la compilacion, la ejecuta.
 
-        'optimizar' agrega -O1, que enciende la fase 6. Vale para todos los
-        modos a proposito: asi se puede mirar el mismo archivo con y sin
-        optimizar en cualquiera de las vistas -- el codigo intermedio, el
-        ensamblador, los bundles -- y comparar.
+        'nivel_opt' selecciona -O0, -O1 o -O2. El modo de metricas agrega
+        tambien el calendario del mismo nivel para el panel comparativo.
         """
         banderas = {
             "binario": [],
@@ -95,8 +452,8 @@ class Nucleo:
             "paquetes": ["-p"],
         }.get(modo, [])
 
-        if optimizar:
-            banderas = banderas + ["-O1"]
+        if nivel_opt:
+            banderas = banderas + [f"-O{nivel_opt}"]
 
         salida = None
         argumentos = [self.novac] + banderas + [ruta]
@@ -122,6 +479,105 @@ class Nucleo:
             return {"error": f"no se pudo ejecutar novac: {e}"}
         transcurrido = time.perf_counter() - inicio
 
+        metricas = None
+        calendario = None
+        if r.returncode == 0:
+            metricas_texto = r.stdout
+            ruta_metricas = None
+            if modo != "metricas":
+                ruta_metricas = ruta + ".metricas.nvx"
+                args_metricas = [self.novac, "--metricas"]
+                if nivel_opt:
+                    args_metricas.append(f"-O{nivel_opt}")
+                args_metricas.extend([ruta, "-o", ruta_metricas])
+                try:
+                    r_metricas = subprocess.run(
+                        args_metricas, capture_output=True, text=True,
+                        timeout=TIEMPO_LIMITE, cwd=self.raiz,
+                    )
+                except subprocess.TimeoutExpired:
+                    return {"error": "la medicion de metricas excedio el tiempo limite"}
+                except OSError as e:
+                    return {"error": f"no se pudieron medir las metricas: {e}"}
+                if r_metricas.returncode != 0:
+                    return {
+                        "error": "novac no pudo generar las metricas comparativas",
+                        "errores": r_metricas.stderr,
+                        "salida": r_metricas.stdout,
+                    }
+                metricas_texto = r_metricas.stdout
+                try:
+                    for extra in (ruta_metricas,
+                                  os.path.splitext(ruta_metricas)[0] + ".asm"):
+                        if os.path.isfile(extra):
+                            os.remove(extra)
+                except OSError as e:
+                    return {"error": f"no se pudo limpiar la salida de metricas: {e}"}
+
+            metricas = leer_metricas(metricas_texto)
+            if metricas is None:
+                return {
+                    "error": "novac --metricas produjo un reporte incompleto",
+                    "salida": metricas_texto,
+                    "errores": r.stderr,
+                }
+            if modo == "metricas":
+                ciclos = self.medir_ciclos_rtl(ruta, nivel_opt)
+                if not ciclos.get("disponible") and \
+                        ciclos.get("motivo", "").startswith(
+                            "se requieren iverilog y vvp"):
+                    estimados = metricas.get("ciclos_estimados", {})
+                    antes = estimados.get("antes")
+                    despues = estimados.get("despues")
+                    if antes and despues and antes.get("disponible") and \
+                            despues.get("disponible"):
+                        ciclos = {
+                            "disponible": True,
+                            "origen": "estimado",
+                            "antes": {
+                                clave: antes[clave]
+                                for clave in ("ciclos", "bundles",
+                                              "instrucciones", "ipc")
+                            },
+                            "despues": {
+                                clave: despues[clave]
+                                for clave in ("ciclos", "bundles",
+                                              "instrucciones", "ipc")
+                            },
+                        }
+                    else:
+                        motivos = [
+                            valor.get("motivo", "estimacion no disponible")
+                            for valor in (antes, despues)
+                            if valor and not valor.get("disponible")
+                        ]
+                        if not motivos:
+                            motivos.append("estimacion C no disponible")
+                        ciclos = {
+                            "disponible": False,
+                            "origen": "estimado",
+                            "motivo": "simulador C: no soportado: " +
+                                      "; ".join(motivos),
+                        }
+                metricas["ciclos_rtl"] = ciclos
+            try:
+                r_cal = subprocess.run(
+                    [self.novac, "--calendario", f"-O{nivel_opt}", ruta],
+                    capture_output=True, text=True, timeout=TIEMPO_LIMITE,
+                    cwd=self.raiz,
+                )
+            except subprocess.TimeoutExpired:
+                return {"error": "la generacion del calendario excedio el tiempo limite"}
+            except OSError as e:
+                return {"error": f"no se pudo generar el calendario: {e}"}
+            if r_cal.returncode != 0:
+                return {
+                    "error": "novac no pudo generar el calendario",
+                    "errores": r_cal.stderr,
+                    "salida": r_cal.stdout,
+                }
+            calendario = r_cal.stdout
+
         tamano = None
         if salida and os.path.isfile(salida):
             tamano = os.path.getsize(salida)
@@ -143,6 +599,8 @@ class Nucleo:
             # pide registrar; se mide aqui para poder graficarla despues.
             "milisegundos": round(transcurrido * 1000, 2),
             "bytes_generados": tamano,
+            "metricas": metricas,
+            "calendario": calendario,
         }
 
 
@@ -269,6 +727,8 @@ class Manejador(http.server.SimpleHTTPRequestHandler):
                 return self.responder_json(self.hacer_clones(peticion))
             if accion == "compilar":
                 return self.responder_json(self.hacer_compilar(peticion))
+            if accion == "ejecutar_rtl":
+                return self.responder_json(self.hacer_ejecutar_rtl(peticion))
             if accion == "guardar":
                 return self.responder_json(self.hacer_guardar(peticion))
         except Exception as e:                       # noqa: BLE001
@@ -335,8 +795,25 @@ class Manejador(http.server.SimpleHTTPRequestHandler):
     def hacer_compilar(self, p):
         nombre = p.get("nombre", "editor.nv")
         ruta = self.taller.escribir(nombre, p.get("contenido", ""))
-        return self.nucleo.compilar(ruta, p.get("modo", "binario"),
-                                    bool(p.get("optimizar", False)))
+        nivel = p.get("nivel_opt", 1 if p.get("optimizar", False) else 0)
+        try:
+            nivel = int(nivel)
+        except (TypeError, ValueError):
+            return {"error": "nivel de optimizacion invalido; use 0, 1 o 2"}
+        if nivel not in (0, 1, 2):
+            return {"error": "nivel de optimizacion invalido; use 0, 1 o 2"}
+        return self.nucleo.compilar(ruta, p.get("modo", "binario"), nivel)
+
+    def hacer_ejecutar_rtl(self, p):
+        nombre = p.get("nombre", "editor.nv")
+        try:
+            nivel = int(p.get("nivel_opt", 0))
+        except (TypeError, ValueError):
+            return {"error": "nivel de optimizacion invalido; use 0, 1 o 2"}
+        if nivel not in (0, 1, 2):
+            return {"error": "nivel de optimizacion invalido; use 0, 1 o 2"}
+        ruta = self.taller.escribir(nombre, p.get("contenido", ""))
+        return self.nucleo.ejecutar_rtl(ruta, nivel)
 
     def hacer_guardar(self, p):
         destino = self.ruta_segura(p.get("nombre", ""))

@@ -96,6 +96,7 @@ typedef struct TACInst {
  */
 typedef struct TACSimbolo {
     char *nombre;
+    uint64_t id;
     char *funcion;        /* a que funcion pertenece */
     int es_param;
     int posicion;         /* palabra de argumento donde llega, 1..n */
@@ -124,6 +125,9 @@ typedef struct TACList {
 } TACList;
 
 /* --- Construccion --- */
+/* Nivel de optimizacion configurado por el controlador del compilador. */
+extern int nivel_opt;
+
 TACList *tac_create_list(void);
 TACInst *tac_append(TACList *list, TACOp op, const char *res,
                     const char *a1, const char *a2);
@@ -149,6 +153,8 @@ void tac_print_inst(FILE *out, const TACInst *i);
 
 /* --- Consultas que necesita codegen.c --- */
 bool tac_es_temporal(const char *nombre);
+/* Convierte el nombre interno unico de un simbolo a su nombre Nova. */
+const char *tac_nombre_fuente(const char *nombre);
 /* Busca un local o parametro por funcion y nombre. */
 const TACSimbolo *tac_buscar_simbolo(const TACList *l, const char *funcion,
                                      const char *nombre);

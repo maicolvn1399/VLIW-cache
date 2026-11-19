@@ -119,6 +119,13 @@ DEPS_credencial   := $(wildcard $(CPU)/*.sv) \
 # compara lo que dejan contra los valores de sus cabeceras. El quinto,
 # recorrido_cache, es el unico cuyo oraculo incluye los CONTADORES de la cache
 # y no solo los datos: su numero de aciertos y fallos sale de aritmetica.
+# tb_patrones monta los tres procesadores de la Iteracion 5, uno por patron de
+# acceso, y comprueba sus CONTADORES contra lo que la teoria predice.
+DEPS_patrones     := $(wildcard $(CPU)/*.sv) \
+                     $(PROGS)/patron_secuencial.hex \
+                     $(PROGS)/patron_aleatorio.hex \
+                     $(PROGS)/patron_stride.hex
+
 DEPS_ejemplos     := $(wildcard $(CPU)/*.sv) \
                      $(PROGS)/fibonacci.hex \
                      $(PROGS)/estadisticas.hex \
@@ -155,7 +162,7 @@ XFLAGS_sum := -DCERBERO_IMEM_FILE='"$(PROGS)/suma_10_15.hex"' \
 # Para estas, la receta no antepone $(CPU)/<unidad>.sv
 NO_RTL := crypto_vault latency wconf pipeline fetch_flow asm div archivo cifrado \
           logout vliw \
-          credencial descifrado programa ejemplos sum
+          credencial descifrado programa ejemplos sum patrones
 
 # Objetivos derivados. Se nombran en variables porque las reglas de abajo son
 # ESTATICAS y no implicitas: make omite la busqueda de reglas implicitas para
@@ -229,6 +236,9 @@ PALABRAS_contar_hasta_n  := 16384
 # recorrido_cache.s recorre un arreglo de 4 KB en 0x2000: necesita la dmem
 # completa de tb_ejemplos, no las 64 palabras por omision
 PALABRAS_recorrido_cache := 16384
+PALABRAS_patron_aleatorio := 16384
+PALABRAS_patron_stride := 16384
+PALABRAS_patron_secuencial := 16384
 # tb_sum instancia memorias chicas: 64 bundles y 16 palabras
 BUNDLES_suma_10_15  := 64
 PALABRAS_suma_10_15 := 16
@@ -553,7 +563,8 @@ empacar:
 # memoria de datos (make cifrar los corre con ella).
 PROGS_METRICAS := fibonacci estadisticas contar_hasta_n div32_prueba feistel \
                   lazo_estres sesion_sin_logout suma_10_15 \
-                  suma_simple_emp suma_vliw_emp recorrido_cache
+                  suma_simple_emp suma_vliw_emp recorrido_cache \
+                  patron_secuencial patron_stride patron_aleatorio
 
 .PHONY: metricas
 metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp

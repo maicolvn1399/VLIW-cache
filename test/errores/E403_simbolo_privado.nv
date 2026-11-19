@@ -1,0 +1,5 @@
+importa "modulos/E403_privado.nv" ut privado;
+
+functio principale() -> integer {
+    redde privado.secreto();
+}

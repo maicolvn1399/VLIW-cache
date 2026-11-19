@@ -138,6 +138,19 @@ static void avanzar(const char *t, int n) {
 }
 #define YY_USER_ACTION avanzar(yytext, yyleng);
 
+static void texto_caracter_no_valido(const char *txt, char *buf, size_t n) {
+    if (txt == NULL || txt[0] == '\0') {
+        snprintf(buf, n, "\\0");
+        return;
+    }
+    unsigned char ch = (unsigned char)txt[0];
+    if (ch == '\n') snprintf(buf, n, "\\n");
+    else if (ch == '\t') snprintf(buf, n, "\\t");
+    else if (ch == '\r') snprintf(buf, n, "\\r");
+    else if (ch < 0x20 || ch == 0x7F) snprintf(buf, n, "\\x%02X", ch);
+    else snprintf(buf, n, "%c", ch);
+}
+
 /* Cuenta caracteres visibles para mensajes de error, ignorando bytes de continuacion UTF-8. */
 static int largo_utf8(const char *t) {
     int n = 0;
@@ -266,8 +279,8 @@ static int largo_utf8(const char *t) {
 "~"    { return TK_NOT; }
 
     /* Cualquier otro caracter es invalido fuera de una cadena. */
-[\x80-\xFF]+  { diag_error("E101", yylloc.first_line, yylloc.first_column, largo_utf8(yytext), "caracter no valido '%s' fuera de una cadena", yytext); }
-.      { diag_error("E101", yylloc.first_line, yylloc.first_column, 1, "caracter no valido '%s' fuera de una cadena", yytext); }
+[\x80-\xFF]+  { char repr[8]; texto_caracter_no_valido(yytext, repr, sizeof(repr)); diag_error("E101", yylloc.first_line, yylloc.first_column, largo_utf8(yytext), "caracter no valido '%s' fuera de una cadena", repr); }
+.      { char repr[8]; texto_caracter_no_valido(yytext, repr, sizeof(repr)); diag_error("E101", yylloc.first_line, yylloc.first_column, 1, "caracter no valido '%s' fuera de una cadena", repr); }
 
 <<EOF>> { yylloc.first_line = yylloc.last_line = lin_act;
           yylloc.first_column = yylloc.last_column = col_act;

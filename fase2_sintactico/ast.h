@@ -2,6 +2,7 @@
 #define AST_H
 
 #include <stdio.h>
+#include <stdint.h>
 
 /* Estructura basica del AST usado por la fase sintactica. */
 typedef enum {
@@ -31,6 +32,7 @@ typedef enum {
 
 typedef struct Decor {
     int clase;
+    uint64_t simbolo_id;
     int tipo;            /* DataType como entero */
     int dims, filas, cols, abierto;
     int global;

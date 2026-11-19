@@ -1,0 +1,10 @@
+functio principale() -> integer {
+    varia acumulador_muerto : integer = 0;
+    varia acumulador_vivo : integer = 0;
+    per (varia i : integer = 0; i < 4; i += 1) {
+        acumulador_muerto = acumulador_muerto + i * 3;
+        acumulador_vivo = acumulador_vivo + i;
+        scribe(i);
+    }
+    redde acumulador_vivo;
+}

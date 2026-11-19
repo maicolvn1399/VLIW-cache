@@ -1,0 +1,9 @@
+functio usar(datos : integer[3], siguiente : integer) -> integer {
+    scribe(datos[2]);
+    redde siguiente;
+}
+
+functio principale() -> integer {
+    varia datos : integer[3] = {10, 20, 30};
+    redde usar(datos, 7);
+}

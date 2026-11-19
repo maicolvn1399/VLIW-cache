@@ -1,0 +1,23 @@
+functio transformar(x : integer) -> integer {
+    redde x * 2 + 1;
+}
+
+functio procesar(base : integer) -> integer {
+    varia total : integer = base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    total = total + base;
+    scribe(total);
+    redde total;
+}
+
+functio principale() -> integer {
+    redde procesar(transformar(5));
+}

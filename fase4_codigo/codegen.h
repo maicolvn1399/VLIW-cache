@@ -12,10 +12,10 @@
  * produce un valor y quien lo consume, y un bundle de delay slot despues de
  * cada salto, que se ejecuta siempre.
  *
- * Esta version emite una instruccion por bundle y no planifica. Empaquetar
- * varias operaciones en un mismo bundle es optimizacion de codigo, que la
- * seccion 9.1 de la guia del proyecto excluye de esta primera version, y no
- * cambia la correccion de lo que sale de aqui.
+ * El emisor construye el grafo de dependencias de cada bloque, calendariza por
+ * camino critico y empaqueta ALU en S0/S1. Conserva las dependencias de
+ * registros, banderas, CRP y memoria; solo llena un delay slot con una
+ * operacion independiente segura. Etiquetas y saltos se remapean al final.
  *
  * Ojo con la numeracion: la fase 5 de la guia es el calculo de saltos y la
  * resolucion de referencias, que si esta hecha, en construir_programa() y
@@ -23,6 +23,7 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #include "tac.h"
 #include "symtab.h"
 
@@ -75,12 +76,39 @@ typedef struct {
     int bundles;         /* bundles emitidos (16 bytes cada uno) */
     int slots_usados;    /* slots con una operacion de verdad */
     int bundles_vacios;  /* bundles sin ninguna operacion */
+    int instrucciones_reordenadas;
+    int temporales_asignados_registro;
+    int renombradas;
+    int temporales_derramados;
+    int dependencias_war;
+    int dependencias_waw;
+    int nops_war;
+    int nops_waw;
 } CodegenEstadisticas;
 
 int codegen_estadisticas(CodegenEstadisticas *out);
 
+typedef struct {
+    bool soportado;
+    char motivo[128];
+    uint64_t ciclos;
+    uint64_t bundles_ejecutados;
+    uint64_t instrucciones;
+} CodegenSimulacion;
+
+bool codegen_simular_vliw(TACList *tac, CodegenSimulacion *out);
+
+/* Construye el calendario para medirlo sin emitir un archivo de salida. */
+bool codegen_measure_vliw(TACList *tac, CodegenEstadisticas *out);
+
 /* Muestra cada bundle con su dirección, slots de ensamblador y bytes emitidos. */
 bool codegen_print_packages(TACList *tac, SymbolTable *st, FILE *out);
+
+/* Muestra el calendario final y la dependencia que deja cada slot en NOP. */
+bool codegen_print_calendar(TACList *tac, SymbolTable *st, FILE *out);
+
+/* Muestra los intervalos, registros asignados y derrames de cada funcion. */
+bool codegen_print_allocation(TACList *tac, FILE *out);
 
 /* Emite el ejecutable binario: encabezado de 32 bytes, los bundles de 128
  * bits y la seccion de datos. Se construye desde la misma lista de bundles

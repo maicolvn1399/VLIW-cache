@@ -234,7 +234,11 @@ d_fase3() {
     for f in test/advertencias/W*.nv; do
         [ -f "$f" ] || continue
         nombre=$(basename "$f" .nv); codigo=${nombre%%_*}
-        salida=$($NOVAC "$f" -o "$TMP/a.out" 2>&1); rc=$?
+        if [ "$codigo" = "W010" ]; then
+            salida=$($NOVAC -O1 "$f" -o "$TMP/a.out" 2>&1); rc=$?
+        else
+            salida=$($NOVAC "$f" -o "$TMP/a.out" 2>&1); rc=$?
+        fi
         obtenidos=$(echo "$salida" | grep -o "advertencia\[W[0-9]*\]" | sed 's/.*\[\(.*\)\]/\1/' | sort -u | tr '\n' ' ')
         case " $obtenidos " in
             *" $codigo "*)
@@ -280,15 +284,20 @@ d_fase4() {
         *) falla "el ciclo de factorial.nv se aplano" ;;
     esac
 
-    # Los tres desplazamientos de Nova son tres instrucciones distintas.
+    # Los tres desplazamientos de Nova son instrucciones distintas. << puede
+    # usar la forma inmediata cuando el monto es constante.
     salida=$($NOVAC -s test/ejemplos/desplazamientos.nv -o "$TMP/x.nvx" 2>&1)
-    for par in "sll:<<" "srl:>>>" "sra:>>"; do
+    for par in "srl:>>>" "sra:>>"; do
         mn=${par%%:*}; nv=${par##*:}
         case "$salida" in
             *"$mn "*) ok "$nv se emite como $mn" ;;
             *) falla "$nv no produjo $mn" ;;
         esac
     done
+    case "$salida" in
+        *"sll "*|*"slli "*) ok "<< se emite como sll o slli" ;;
+        *) falla "<< no produjo sll ni slli" ;;
+    esac
 
     # La multiplicacion existe en el ISA y debe emitirse.
     salida=$($NOVAC -s test/factorial.nv -o "$TMP/x.nvx" 2>&1)
@@ -375,6 +384,8 @@ d_cobertura() {
     # prueba; si alguna vez aparece, es un error del compilador, no del
     # programa que se compila.
     echo "E410" >> "$TMP/probados"
+    # W009 se genera mediante un fuente temporal en test/run_tests.sh.
+    echo "W009" >> "$TMP/probados"
     sort -u -o "$TMP/probados" "$TMP/probados"
 
     sin_prueba=$(comm -23 "$TMP/emite" "$TMP/probados" | tr '\n' ' ')

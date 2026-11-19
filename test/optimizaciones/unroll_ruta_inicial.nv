@@ -1,0 +1,22 @@
+functio elegir(x : integer) -> integer {
+    si (x == 0) {
+        redde 1;
+    } aliter {
+        redde 2;
+    }
+}
+
+functio principale() -> integer {
+    varia inicio : integer = 0;
+    varia suma : integer = 0;
+    si (elegir(0) == 1) {
+        inicio = 1;
+    } aliter {
+        inicio = 2;
+    }
+    dum (inicio < 4) {
+        suma = suma + inicio;
+        inicio = inicio + 1;
+    }
+    redde suma;
+}

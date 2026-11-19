@@ -43,6 +43,7 @@ const App = {
   analizando: false,
   pendiente: false,
   rangos: [],
+  ejecucion: null,
 };
 
 const EJEMPLO = `# Programa de ejemplo en Nova.
@@ -1222,36 +1223,252 @@ async function guardar() {
 
 /* ------------------------------------------------------------ compilar */
 
+function dibujarMetricas(metricas) {
+  const { antes, despues, tiempos_ms, contadores } = metricas;
+  const filas = [
+    ["Instrucciones TAC", antes.tac, despues.tac],
+    ["Instrucciones finales no-NOP", antes.instrucciones, despues.instrucciones],
+    ["Bundles", antes.bundles, despues.bundles],
+    ["Bytes de codigo", antes.bytes, despues.bytes],
+    ["Ocupacion", `${antes.ocupacion_pct}%`, `${despues.ocupacion_pct}%`],
+  ];
+  const barras = [
+    ["Instrucciones TAC", antes.tac, despues.tac],
+    ["Finales no-NOP", antes.instrucciones, despues.instrucciones],
+    ["Bundles", antes.bundles, despues.bundles],
+    ["Bytes de codigo", antes.bytes, despues.bytes],
+    ["Ocupacion", antes.ocupacion_pct, despues.ocupacion_pct],
+  ];
+  const rtl = metricas.ciclos_rtl;
+  const panelRtl = $("metricas-rtl");
+  panelRtl.hidden = !rtl;
+  if (rtl && rtl.disponible) {
+    const estimado = rtl.origen === "estimado";
+    const nombreCiclos = estimado ? "Ciclos estimados" : "Ciclos RTL";
+    const nombreInstrucciones = estimado
+      ? "Instrucciones estimadas" : "Instrucciones RTL";
+    const nombreIpc = estimado ? "IPC estimado" : "IPC RTL";
+    filas.push([nombreCiclos, rtl.antes.ciclos, rtl.despues.ciclos]);
+    if (rtl.antes.bundles != null && rtl.despues.bundles != null) {
+      filas.push(["Bundles ejecutados", rtl.antes.bundles,
+        rtl.despues.bundles]);
+    }
+    filas.push([nombreInstrucciones, rtl.antes.instrucciones,
+      rtl.despues.instrucciones]);
+    filas.push([nombreIpc, rtl.antes.ipc.toFixed(3),
+      rtl.despues.ipc.toFixed(3)]);
+    barras.push([nombreCiclos, rtl.antes.ciclos, rtl.despues.ciclos]);
+    barras.push([nombreInstrucciones, rtl.antes.instrucciones,
+      rtl.despues.instrucciones]);
+    const advertencias = (rtl.advertencias || []).join("\n");
+    panelRtl.textContent = (estimado
+      ? "Ciclos e instrucciones estimados ejecutando los bundles en el simulador C."
+      : "Ciclos e instrucciones medidos ejecutando el binario en el RTL CERBERO.") +
+      (advertencias ? `\nAdvertencias de la simulacion:\n${advertencias}` : "");
+  } else if (rtl) {
+    panelRtl.textContent = `Metricas RTL no disponibles: ${rtl.motivo}`;
+  }
+  // "Antes" no es -O0. Es el TAC previo a la fase 6 pasado por el MISMO
+  // backend que esta corrida, asi que ya trae la asignacion de registros y la
+  // calendarizacion del nivel elegido. Lo que aisla es el efecto de la fase 6
+  // sola, y por eso subestima lo que gana optimizar frente a -O0. Decirlo en
+  // la cabecera evita que alguien lea esta tabla como "sin optimizar contra
+  // optimizado", que es lo que las palabras sugieren y no lo que miden.
+  $("metricas-tabla").innerHTML =
+    `<p class="metricas-ayuda">«Antes» = el codigo intermedio previo a la fase 6, ` +
+    `compilado con el mismo backend y el mismo nivel. No es <code>-O0</code>: ` +
+    `aisla el efecto de la fase 6 sola. Para comparar contra <code>-O0</code> ` +
+    `hay que compilar en cada nivel por separado.</p>` +
+    `<table class="tabla-metricas"><thead><tr><th>Metrica</th><th>Antes</th><th>Despues</th></tr></thead><tbody>` +
+    filas.map(([nombre, a, d]) =>
+      `<tr><th>${escapar(nombre)}</th><td>${escapar(String(a))}</td><td>${escapar(String(d))}</td></tr>`
+    ).join("") + "</tbody></table>";
+
+  $("metricas-barras").innerHTML = barras.map(([nombre, a, d]) => {
+    const maximo = Math.max(Number(a), Number(d), 1);
+    const anchoAntes = Math.max(0, Math.min(100, 100 * Number(a) / maximo));
+    const anchoDespues = Math.max(0, Math.min(100, 100 * Number(d) / maximo));
+    return `<div class="metrica-barra"><strong>${escapar(nombre)}</strong>` +
+      `<div><span>Antes</span><i><b style="width:${anchoAntes}%"></b></i><em>${escapar(String(a))}</em></div>` +
+      `<div><span>Despues</span><i><b class="despues" style="width:${anchoDespues}%"></b></i><em>${escapar(String(d))}</em></div></div>`;
+  }).join("");
+
+  const nombresTiempo = [
+    ["Fases 1-2, lex./sint.", "fase_1_2"],
+    ["Fase 3, semantica/enlace", "fase_3"],
+    ["Fase 4, TAC", "fase_4_tac"],
+    ["Fase 4, backend VLIW", "fase_4_backend"],
+    ["Fase 6, optimizacion", "fase_6"],
+    ["Total", "total"],
+  ];
+  $("metricas-tiempos").innerHTML = `<dl class="lista-metricas">${
+    nombresTiempo.map(([nombre, clave]) =>
+      `<dt>${escapar(nombre)}</dt><dd>${Number(tiempos_ms[clave]).toFixed(2)} ms</dd>`
+    ).join("")
+  }</dl>`;
+
+  const nombresContador = [
+    ["Eliminadas", "eliminadas"],
+    ["Reordenadas", "reordenadas"],
+    ["Definiciones renombradas", "renombradas"],
+    ["Temporales asignados a registro", "temporales_asignados_registro"],
+    ["Derramadas", "derramadas"],
+    ["Bucles desenrollados", "bucles"],
+  ];
+  const dependencias = [
+    ["Dependencias WAR", "dependencias_war"],
+    ["Dependencias WAW", "dependencias_waw"],
+    ["NOPs por WAR", "nops_war"],
+    ["NOPs por WAW", "nops_waw"],
+  ];
+  $("metricas-contadores").innerHTML = `<dl class="lista-metricas">${
+    nombresContador.map(([nombre, clave]) =>
+      `<dt>${escapar(nombre)}</dt><dd>${Number(contadores[clave])}</dd>`
+    ).join("")
+  }${
+    dependencias.map(([nombre, clave]) =>
+      `<dt>${escapar(nombre)} (antes / despues)</dt>` +
+      `<dd>${Number(metricas.antes[clave])} / ${Number(metricas.despues[clave])}</dd>`
+    ).join("")
+  }</dl>`;
+}
+
+function dibujarDmem() {
+  const palabras = App.ejecucion?.dmem || [];
+  const soloNoCero = $("dmem-solo-no-cero").checked;
+  const filtro = $("dmem-buscar").value.trim().toLowerCase();
+  const visibles = palabras.filter((palabra) =>
+    (!soloNoCero || palabra.no_cero) &&
+    (!filtro || palabra.direccion.toLowerCase().includes(filtro) ||
+      palabra.valor.toLowerCase().includes(filtro))
+  );
+  $("dmem-conteo").textContent =
+    `${visibles.length.toLocaleString("es")} de ${palabras.length.toLocaleString("es")} palabras`;
+  $("dmem-contenido").textContent = visibles.length
+    ? visibles.map((palabra) =>
+      `${palabra.direccion}  ${palabra.valor}`
+    ).join("\n")
+    : "No hay palabras que coincidan con el filtro.";
+}
+
+function verPestanaEjecucion(nombre) {
+  document.querySelectorAll(".ejecucion-pestana").forEach((p) =>
+    p.classList.toggle("activa", p.dataset.ejecucion === nombre));
+  $("ejecucion-resultado").hidden = nombre !== "resultado";
+  $("ejecucion-dmem").hidden = nombre !== "dmem";
+  if (nombre === "dmem") dibujarDmem();
+}
+
+function dibujarEjecucion(resultado) {
+  const retornoHex = (Number(resultado.retorno) >>> 0)
+    .toString(16).toUpperCase().padStart(8, "0");
+  const salida = resultado.scribe.length
+    ? `<ol>${resultado.scribe.map((valor) =>
+      `<li>${escapar(String(valor))}</li>`
+    ).join("")}</ol>`
+    : "<p>El programa no escribio valores con scribe.</p>";
+  const comparacion = resultado.comparado_con_o0
+    ? "R6 y scribe coinciden con la ejecucion -O0."
+    : "Ejecucion base sin optimizacion.";
+
+  $("ejecucion-resultado").innerHTML =
+    `<div class="ejecucion-resumen">` +
+    `<div><span>Optimizacion</span><strong>-O${resultado.nivel_opt}</strong></div>` +
+    `<div><span>Retorno R6</span><strong>${escapar(String(resultado.retorno))} (0x${retornoHex})</strong></div>` +
+    `<div><span>Ciclos RTL</span><strong>${Number(resultado.ciclos).toLocaleString("es")}</strong></div>` +
+    `<div><span>Instrucciones RTL</span><strong>${Number(resultado.instrucciones).toLocaleString("es")}</strong></div>` +
+    `<div><span>IPC</span><strong>${Number(resultado.ipc).toFixed(3)}</strong></div>` +
+    `</div><h3>Salida de scribe (${resultado.scribe.length} valores)</h3>` +
+    `${salida}<p class="metricas-ayuda">${comparacion}</p>`;
+  $("ejecucion-estado").textContent =
+    `Ejecucion RTL correcta con -O${resultado.nivel_opt}. ` +
+    `DMEM contiene ${resultado.dmem.length.toLocaleString("es")} palabras de 32 bits.`;
+  $("pestana-ejecucion-dmem").disabled = false;
+  dibujarDmem();
+}
+
+async function ejecutarRTL() {
+  const nivelOpt = Number($("nivel-opt").value);
+  const boton = $("btn-ejecutar-rtl");
+  boton.disabled = true;
+  App.ejecucion = null;
+  $("pestana-ejecucion-dmem").disabled = true;
+  $("ejecucion-resultado").textContent = "Ejecutando el programa sobre CERBERO RTL...";
+  $("ejecucion-estado").textContent = "Compilando, simulando y capturando la DMEM final...";
+  verPestanaEjecucion("resultado");
+  verPanel("ejecucion");
+  estado(`ejecutando -O${nivelOpt} en RTL...`, "trabajando");
+  try {
+    const r = await pedir("ejecutar_rtl", {
+      nombre: App.actual,
+      contenido: codigo.value,
+      nivel_opt: nivelOpt,
+    });
+    if (r.error) {
+      $("ejecucion-resultado").textContent =
+        r.error + (r.advertencias?.length ? `\n${r.advertencias.join("\n")}` : "");
+      $("ejecucion-estado").textContent = "La ejecucion RTL no se completo.";
+      estado("fallo en ejecucion RTL", "mal");
+      return;
+    }
+
+    App.ejecucion = r;
+    dibujarEjecucion(r);
+    verPestanaEjecucion("resultado");
+    estado(`ejecutado en RTL con -O${nivelOpt}`, "ok");
+  } catch (e) {
+    $("ejecucion-resultado").textContent = `No se pudo ejecutar en RTL: ${e}`;
+    $("ejecucion-estado").textContent = "La ejecucion RTL no se completo.";
+    estado("fallo en ejecucion RTL", "mal");
+  } finally {
+    boton.disabled = false;
+  }
+}
+
 async function compilar() {
+  const nivelOpt = Number($("nivel-opt").value);
   const modo = $("modo-compilar").value;
-  const optimizar = $("opt-o1").checked;
+  const boton = $("btn-compilar");
+  boton.disabled = true;
   estado("compilando...", "trabajando");
-  verPanel("salida");
+  try {
+    const r = await pedir("compilar", {
+      nombre: App.actual, contenido: codigo.value,
+      modo, nivel_opt: nivelOpt,
+    });
 
-  const r = await pedir("compilar", {
-    nombre: App.actual, contenido: codigo.value, modo, optimizar,
-  });
+    if (r.error) {
+      $("salida-texto").textContent = r.error + (r.errores ? `\n${r.errores}` : "");
+      estado("fallo", "mal");
+      verPanel("salida");
+      return;
+    }
 
-  const caja = $("salida-texto");
-  if (r.error) { caja.textContent = r.error; estado("fallo", "mal"); return; }
+    const bien = r.codigo_salida === 0;
+    const cabecera = `$ novac -O${nivelOpt} ${modo === "binario" ? "" : `[${modo}] `}${App.actual}\n` +
+      `codigo de salida: ${r.codigo_salida}  tiempo de compilacion: ${r.milisegundos} ms` +
+      (r.bytes_generados ? `  binario: ${r.bytes_generados} bytes` : "") + "\n" +
+      "-".repeat(72) + "\n";
+    $("salida-texto").textContent =
+      cabecera + (r.salida || "") + (r.errores ? `\n${r.errores}` : "");
 
-  const bien = r.codigo_salida === 0;
-  let cabecera = `$ novac ${optimizar ? "-O1 " : ""}` +
-                 `${modo === "binario" ? "" : "[" + modo + "] "}${App.actual}\n`;
-  cabecera += `codigo de salida: ${r.codigo_salida}  `;
-  cabecera += `tiempo de compilacion: ${r.milisegundos} ms`;
-  if (r.bytes_generados) cabecera += `  binario: ${r.bytes_generados} bytes`;
-  cabecera += "\n" + "-".repeat(72) + "\n";
-
-  caja.innerHTML =
-    `<span class="met">${escapar(cabecera)}</span>` +
-    escapar(r.salida || "") +
-    (r.errores ? `<span class="${bien ? "ok" : "mal"}">${escapar(r.errores)}</span>` : "") +
-    (bien ? '<span class="ok">\ncompilacion correcta</span>' : "");
-
-  estado(bien ? `compilado en ${r.milisegundos} ms` : "la compilacion fallo",
-         bien ? "ok" : "mal");
-  if (!bien) analizar();
+    if (bien && r.metricas && r.calendario !== null) {
+      dibujarMetricas(r.metricas);
+      $("calendario-texto").textContent = r.calendario;
+      verPanel("optimizacion");
+      estado(`compilado con -O${nivelOpt} en ${r.milisegundos} ms`, "ok");
+    } else {
+      estado("la compilacion fallo", "mal");
+      verPanel("salida");
+      analizar();
+    }
+  } catch (e) {
+    $("salida-texto").textContent = `No se pudo completar la compilacion: ${e}`;
+    estado("fallo", "mal");
+    verPanel("salida");
+  } finally {
+    boton.disabled = false;
+  }
 }
 
 /* ------------------------------------------------------------- paneles */
@@ -1350,6 +1567,7 @@ function conectar() {
   lienzo.addEventListener("mouseleave", () => { globo.hidden = true; });
 
   $("btn-compilar").onclick = compilar;
+  $("btn-ejecutar-rtl").onclick = ejecutarRTL;
   $("btn-guardar").onclick = guardar;
   $("btn-clones").onclick = buscarClones;
   $("btn-flujo").onclick = construirFlujo;
@@ -1373,6 +1591,11 @@ function conectar() {
   document.querySelectorAll(".pestana").forEach((p) => {
     p.onclick = () => verPanel(p.dataset.panel);
   });
+  document.querySelectorAll(".ejecucion-pestana").forEach((p) => {
+    p.onclick = () => verPestanaEjecucion(p.dataset.ejecucion);
+  });
+  $("dmem-solo-no-cero").onchange = dibujarDmem;
+  $("dmem-buscar").oninput = dibujarDmem;
 
   window.addEventListener("resize", () => { medir(); redibujar(); });
 }

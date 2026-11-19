@@ -117,6 +117,17 @@ module perf_counters #(
     input  logic ev_l2_store_hit, // <--- NUEVO [L2-05]
     input  logic ev_l2_store_miss,// <--- NUEVO [L2-05]
 
+    // ---- Iteracion 5: lo que exige la seccion 5 del enunciado --------------
+    // 5.2: con politica inclusiva hay que contar las invalidaciones hacia
+    //      atras ejecutadas sobre L1-D.
+    input  logic ev_inv_ejecutada,
+    // 5.3: memoria principal. Un acceso es una transaccion completa de linea,
+    //      originada por un fallo de L2 o por un drenado; los ciclos de
+    //      transferencia son los que el bus pasa ocupado. Con los dos se saca
+    //      la utilizacion del ancho de banda en el informe.
+    input  logic ev_mem_acceso,
+    input  logic ev_mem_ocupado,
+
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
     output logic [CNT_W-1:0] bundles,         // bundles despachados
@@ -147,6 +158,9 @@ module perf_counters #(
     output logic [CNT_W-1:0] l2_load_miss,    // <--- NUEVO [L2-05]
     output logic [CNT_W-1:0] l2_store_hit,    // <--- NUEVO [L2-05]
     output logic [CNT_W-1:0] l2_store_miss,   // <--- NUEVO [L2-05]
+    output logic [CNT_W-1:0] inv_ejecutadas,  // Iteracion 5, seccion 5.2
+    output logic [CNT_W-1:0] mem_accesos,     // Iteracion 5, seccion 5.3
+    output logic [CNT_W-1:0] mem_ciclos,      // Iteracion 5, seccion 5.3
 
     output logic desbordado  // pegajoso: algun contador llego al tope
 );
@@ -233,7 +247,7 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 26; // <--- MODIFICADO [L2-05]: Sube a 26 contadores
+  localparam int NCONT = 29; // Iteracion 5: +3 (invalidaciones y memoria)
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -257,6 +271,9 @@ module perf_counters #(
   localparam int C_L2_LDM   = 23; // <--- NUEVO [L2-05]
   localparam int C_L2_STH   = 24; // <--- NUEVO [L2-05]
   localparam int C_L2_STM   = 25; // <--- NUEVO [L2-05]
+  localparam int C_INV      = 26; // Iteracion 5, seccion 5.2
+  localparam int C_MEM_ACC  = 27; // Iteracion 5, seccion 5.3
+  localparam int C_MEM_CIC  = 28; // Iteracion 5, seccion 5.3
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
@@ -303,6 +320,13 @@ module perf_counters #(
       if (ev_l2_load_miss)  inc[C_L2_LDM] = 3'd1; // <--- NUEVO [L2-05]
       if (ev_l2_store_hit)  inc[C_L2_STH] = 3'd1; // <--- NUEVO [L2-05]
       if (ev_l2_store_miss) inc[C_L2_STM] = 3'd1; // <--- NUEVO [L2-05]
+      // Los tres de la Iteracion 5 van bajo rst_n igual que los de cache: el
+      // ultimo acceso de un programa suele quedar en el delay slot del HALT, y
+      // el drenado de la L2 ocurre despues de halted. Contarlos bajo 'corre'
+      // los perderia.
+      if (ev_inv_ejecutada) inc[C_INV]     = 3'd1;
+      if (ev_mem_acceso)    inc[C_MEM_ACC] = 3'd1;
+      if (ev_mem_ocupado)   inc[C_MEM_CIC] = 3'd1;
     end
 
     if (avanza) begin
@@ -370,6 +394,9 @@ module perf_counters #(
   assign l2_load_miss    = cont[C_L2_LDM]; // <--- NUEVO [L2-05]
   assign l2_store_hit    = cont[C_L2_STH]; // <--- NUEVO [L2-05]
   assign l2_store_miss   = cont[C_L2_STM]; // <--- NUEVO [L2-05]
+  assign inv_ejecutadas  = cont[C_INV];
+  assign mem_accesos     = cont[C_MEM_ACC];
+  assign mem_ciclos      = cont[C_MEM_CIC];
 
   genvar g;
   generate

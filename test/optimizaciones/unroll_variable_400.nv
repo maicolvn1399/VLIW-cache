@@ -1,0 +1,12 @@
+functio obtener_limite() -> integer {
+    redde 400;
+}
+
+functio principale() -> integer {
+    varia limite : integer = obtener_limite();
+    varia suma : integer = 0;
+    per (varia i : integer = 0; i < limite; i += 1) {
+        suma += i;
+    }
+    redde suma;
+}

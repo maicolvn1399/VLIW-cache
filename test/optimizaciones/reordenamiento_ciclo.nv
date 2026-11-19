@@ -1,0 +1,15 @@
+functio sumar_hasta(n : integer) -> integer {
+    varia indice : integer = 0;
+    varia total : integer = 0;
+    varia escala : integer = n * 3;
+    varia sesgo : integer = n + 5;
+    dum (indice < n) {
+        total = total + indice;
+        indice = indice + 1;
+    }
+    redde total + escala + sesgo;
+}
+
+functio principale() -> integer {
+    redde sumar_hasta(7) + sumar_hasta(3);
+}

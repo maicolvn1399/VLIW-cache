@@ -25,7 +25,15 @@
   <div class="acciones">
     <button id="btn-guardar" class="btn">Guardar</button>
     <label class="selector">
-      Compilar
+      Nivel de optimizacion
+      <select id="nivel-opt">
+        <option value="0">-O0</option>
+        <option value="1">-O1</option>
+        <option value="2">-O2</option>
+      </select>
+    </label>
+    <label class="selector">
+      Salida
       <select id="modo-compilar">
         <option value="binario">binario .nvx</option>
         <option value="tokens">tokens (fase 1)</option>
@@ -38,10 +46,8 @@
         <option value="paquetes">bundles y slots</option>
       </select>
     </label>
-    <label class="casilla" title="Enciende la fase 6: eliminacion de codigo muerto sobre el codigo intermedio">
-      <input type="checkbox" id="opt-o1"> -O1
-    </label>
-    <button id="btn-compilar" class="btn btn-primario">Ejecutar</button>
+    <button id="btn-ejecutar-rtl" class="btn">Ejecutar RTL</button>
+    <button id="btn-compilar" class="btn btn-primario">Compilar</button>
   </div>
 
   <div id="estado" class="estado">
@@ -91,6 +97,8 @@
       <button class="pestana" data-panel="simbolos">Tabla de simbolos <span class="contador" id="c-simbolos">0</span></button>
       <button class="pestana" data-panel="flujo">Flujo <span class="contador" id="c-flujo">0</span></button>
       <button class="pestana" data-panel="clones">Clones <span class="contador" id="c-clones">0</span></button>
+      <button class="pestana" data-panel="optimizacion">Optimizacion</button>
+      <button class="pestana" data-panel="ejecucion">Ejecucion</button>
       <button class="pestana" data-panel="salida">Salida</button>
       <button id="btn-expandir" class="btn-expandir">Ampliar panel</button>
     </nav>
@@ -128,6 +136,49 @@
           <button id="btn-clones" class="btn btn-primario">Buscar clones</button>
         </div>
         <div id="clones-resultado"></div>
+      </div>
+      <div class="vista" id="v-optimizacion">
+        <p class="metricas-ayuda">Comparacion del TAC y del codigo VLIW generado. La ocupacion es el porcentaje de slots no-NOP.</p>
+        <div id="metricas-tabla"></div>
+        <p id="metricas-rtl" class="metricas-ayuda" hidden></p>
+        <div id="metricas-barras" class="metricas-barras"></div>
+        <div class="metricas-columnas">
+          <section>
+            <h3>Tiempo por fase (ms)</h3>
+            <div id="metricas-tiempos"></div>
+          </section>
+          <section>
+            <h3>Transformaciones</h3>
+            <div id="metricas-contadores"></div>
+          </section>
+        </div>
+        <h3>Calendario de bundles</h3>
+        <pre id="calendario-texto" class="calendario">Compila para ver los slots y las causas de los NOP.</pre>
+      </div>
+      <div class="vista" id="v-ejecucion">
+        <div class="ejecucion-pestanas">
+          <button class="ejecucion-pestana activa" data-ejecucion="resultado">Resultado</button>
+          <button class="ejecucion-pestana" id="pestana-ejecucion-dmem"
+                  data-ejecucion="dmem" disabled>DMEM final</button>
+        </div>
+        <p id="ejecucion-estado" class="metricas-ayuda">
+          Ejecuta el programa sobre el RTL para ver R6, la salida de scribe y la memoria final.
+        </p>
+        <section id="ejecucion-resultado" class="ejecucion-resultado">
+          Aun no hay una ejecucion.
+        </section>
+        <section id="ejecucion-dmem" class="ejecucion-dmem" hidden>
+          <div class="dmem-filtros">
+            <label class="check">
+              <input id="dmem-solo-no-cero" type="checkbox">
+              mostrar solo palabras no-cero
+            </label>
+            <input id="dmem-buscar" type="search"
+                   placeholder="filtrar direccion o valor" spellcheck="false">
+            <span id="dmem-conteo" class="dmem-conteo"></span>
+          </div>
+          <pre id="dmem-contenido" class="dmem-contenido">Sin volcado DMEM.</pre>
+        </section>
       </div>
       <div class="vista" id="v-salida"><pre class="salida" id="salida-texto">Sin ejecuciones todavia.</pre></div>
     </div>

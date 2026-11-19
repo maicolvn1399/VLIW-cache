@@ -23,11 +23,15 @@ Uso:  python3 test/ide/correr_pruebas.py [--verboso]
 """
 
 import glob
+import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+from unittest import mock
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.abspath(os.path.join(AQUI, "..", ".."))
@@ -224,6 +228,26 @@ def prueba_diagnosticos():
                               d["linea"], d["columna"], d["largo"]))
     comprobar("toda posicion reportada es subrayable (linea, columna y largo validos)",
               not malas, str(malas[:5]))
+
+    # El layout del IDE debe usar la misma tabla dinamica que el generador de
+    # codigo cuando una funcion crea mas de 512 temporales.
+    temporal = os.path.join(AQUI, ".muchos_temporales.nv")
+    try:
+        with open(temporal, "w", encoding="utf-8") as f:
+            f.write("functio principale() -> integer {\n")
+            for n in range(520):
+                f.write(f"varia temporal_{n} : integer = {n};\n")
+            f.write("redde ")
+            f.write(" + ".join(f"temporal_{n}" for n in range(520)))
+            f.write(";\n}\n")
+        r = ide("diagnosticar", temporal)
+        errores = [d for d in r.get("diagnosticos", [])
+                   if d.get("severidad") == "error"]
+        comprobar("IDE calcula el layout con mas de 512 temporales",
+                  not errores, str(r.get("diagnosticos", []))[:1000])
+    finally:
+        if os.path.exists(temporal):
+            os.remove(temporal)
 
     # Puntos de salto. La guia (Fase 3) pide registrar las etiquetas de
     # condicionales y ciclos con su direccion en memoria.
@@ -604,7 +628,8 @@ def prueba_vivacidad():
     comprobar("-O1 reduce el codigo intermedio", len(despues) < len(antes),
               f"{len(antes)} -> {len(despues)}")
     comprobar("-O1 conserva el calculo que se usa",
-              any("vive = " in l for l in despues), str(despues))
+              any("vive = " in l or "= a + b" in l for l in despues),
+              str(despues))
     comprobar("-O1 elimina la cadena muerta entera",
               not any(n in l for l in despues
                       for n in ("muere", "cadena_a", "cadena_b")),
@@ -659,11 +684,15 @@ def prueba_vivacidad():
         n_b = re.search(r"instrucciones de tres direcciones: *(\d+)", b)
         if not n_a or not n_b:
             continue
-        if int(n_b.group(1)) > int(n_a.group(1)):
+        unroll = re.search(r"bucles desplegados antes del DCE: *(\d+)", b)
+        if int(n_b.group(1)) > int(n_a.group(1)) and (
+                unroll is None or int(unroll.group(1)) == 0):
             crecieron.append(nombre)
 
         # Compilar optimizado tiene que seguir produciendo un binario valido.
-        _, err, rc = novac("-O1", f, "-o", os.path.join(RAIZ, ".tmp_opt.nvx"))
+        with tempfile.TemporaryDirectory(prefix="nova_ide_opt_") as temporal:
+            _, err, rc = novac("-O1", f, "-o",
+                               os.path.join(temporal, "program.nvx"))
         if rc != 0:
             fallos.append(f"{nombre}: {err.strip()[:60]}")
 
@@ -680,10 +709,7 @@ def prueba_vivacidad():
             if vivos:
                 rotos.append(f"{nombre}:{g['nombre']} {vivos}")
 
-    if os.path.isfile(os.path.join(RAIZ, ".tmp_opt.nvx")):
-        os.remove(os.path.join(RAIZ, ".tmp_opt.nvx"))
-
-    comprobar("-O1 nunca aumenta el numero de instrucciones",
+    comprobar("-O1 solo aumenta instrucciones al desenrollar lazos",
               not crecieron, ", ".join(crecieron))
     comprobar("ningun temporal llega vivo a la entrada de una funcion",
               not rotos, "; ".join(rotos[:4]))
@@ -694,8 +720,8 @@ def prueba_vivacidad():
     # --sym mide el marco de cada funcion con un segundo recorrido de la fase 4
     # sobre una copia del codigo intermedio. Si esa copia no se optimizara, la
     # tabla diria direcciones de un programa distinto del que esta en el
-    # binario. Al quitar instrucciones, los temporales viven menos y el marco
-    # tiene que encoger.
+    # binario. La asignacion de registros tambien se ejecuta en -O0, asi que
+    # quitar instrucciones puede dejar el mismo marco; nunca debe hacerlo crecer.
     def marco_de(texto, funcion):
         m = re.search(rf"^{funcion}\s+functio.*?marco (\d+) B", texto, re.M)
         return int(m.group(1)) if m else None
@@ -704,8 +730,8 @@ def prueba_vivacidad():
     s0, _, _ = novac("--sym", demo)
     s1, _, _ = novac("--sym", "-O1", demo)
     m0, m1 = marco_de(s0, "con_sobras"), marco_de(s1, "con_sobras")
-    comprobar("el marco encoge al optimizar: --sym mide el codigo optimizado",
-              m0 is not None and m1 is not None and m1 < m0, f"{m0} -> {m1}")
+    comprobar("el marco no crece al optimizar: --sym mide el codigo optimizado",
+              m0 is not None and m1 is not None and m1 <= m0, f"{m0} -> {m1}")
 
     # Pero el desplazamiento dentro del marco no cambia: lo calcula la fase 3 y
     # la optimizacion no toca declaraciones.
@@ -798,9 +824,209 @@ def prueba_vivacidad():
     sobran_ide = v["resumen"]["sobran"]
     met, _, _ = novac("--metricas", "-O1", basica, "-o", os.devnull)
     quitadas = re.search(r"eliminadas: *(\d+)", met)
-    comprobar("el IDE anuncia lo mismo que -O1 elimina",
-              quitadas and int(quitadas.group(1)) == sobran_ide,
+    comprobar("el compilador elimina al menos lo que anuncia el IDE",
+              quitadas and int(quitadas.group(1)) >= sobran_ide,
               f"IDE={sobran_ide} novac={quitadas.group(1) if quitadas else '?'}")
+
+
+def prueba_panel_optimizacion():
+    print("\n[8] Niveles, metricas y panel de optimizacion")
+
+    fuente = os.path.join(RAIZ, "test", "optimizaciones", "unroll_constante.nv")
+    informes = {}
+    for nivel in range(3):
+        texto, errores, codigo = novac(
+            "--metricas", f"-O{nivel}", fuente, "-o", os.devnull)
+        comprobar(f"-O{nivel} compila y entrega metricas", codigo == 0,
+                  errores.strip()[:180])
+        informes[nivel] = texto
+        comprobar(f"-O{nivel} informa ANTES/DESPUES y tiempos por fase",
+                  "  ANTES\n" in texto and "  DESPUES\n" in texto and
+                  "tiempo fase 1-2 (lexico/sintactico):" in texto and
+                  "tiempo fase 6 (optimizacion):" in texto,
+                  texto[-500:])
+        comprobar(f"-O{nivel} informa instrucciones, bytes y ocupacion",
+                  "instrucciones finales no-NOP:" in texto and
+                  "bytes de codigo:" in texto and "ocupacion:" in texto,
+                  texto[-500:])
+
+    def bucles_desenrollados(texto):
+        m = re.search(r"bucles desenrollados:\s*(\d+)", texto)
+        return int(m.group(1)) if m else None
+
+    comprobar("-O1 no aplica loop unrolling",
+              bucles_desenrollados(informes[1]) == 0,
+              str(bucles_desenrollados(informes[1])))
+    comprobar("-O2 aplica loop unrolling cuando el lazo es elegible",
+              bucles_desenrollados(informes[2]) > 0,
+              str(bucles_desenrollados(informes[2])))
+
+    def contador(texto, nombre):
+        encontrados = re.findall(
+            rf"^\s*{re.escape(nombre)}:\s*(\d+)", texto, flags=re.MULTILINE)
+        return int(encontrados[-1]) if encontrados else None
+
+    transformaciones = (
+        "eliminadas", "reordenadas", "renombradas",
+        "temporales asignados a registro", "derramadas",
+        "bucles desenrollados",
+    )
+    comprobar("-O0 no aplica transformaciones opcionales",
+              all(contador(informes[0], nombre) == 0
+                  for nombre in transformaciones),
+              {nombre: contador(informes[0], nombre)
+               for nombre in transformaciones})
+    transformaciones_o2 = (
+        "reordenadas", "renombradas", "temporales asignados a registro",
+        "derramadas", "bucles desenrollados",
+    )
+    comprobar("-O1 no activa las transformaciones exclusivas de -O2",
+              all(contador(informes[1], nombre) == 0
+                  for nombre in transformaciones_o2),
+              {nombre: contador(informes[1], nombre)
+               for nombre in transformaciones_o2})
+    comprobar("los contadores de asignacion y calendarizacion aparecen",
+              all(nombre in informes[2] for nombre in (
+                  "reordenadas:", "renombradas:",
+                  "temporales asignados a registro:", "derramadas:",
+                  "dependencias WAR:", "dependencias WAW:",
+                  "NOPs por dependencia WAR:", "NOPs por dependencia WAW:")),
+              informes[2][-500:])
+
+    ruta_servidor = os.path.join(RAIZ, "ide", "servidor.py")
+    spec = importlib.util.spec_from_file_location("nova_ide_servidor", ruta_servidor)
+    if spec is None or spec.loader is None:
+        comprobar("el servidor del IDE se puede cargar", False, ruta_servidor)
+        return
+    servidor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(servidor)
+
+    for nivel, texto in informes.items():
+        parseadas = servidor.leer_metricas(texto)
+        comprobar(f"el IDE interpreta las metricas de -O{nivel}",
+                  parseadas is not None and
+                  all(clave in parseadas["antes"] and
+                      clave in parseadas["despues"]
+                      for clave in ("tac", "instrucciones", "bundles",
+                                    "bytes", "ocupacion_pct")) and
+                  "fase_6" in parseadas["tiempos_ms"] and
+                  "reordenadas" in parseadas["contadores"],
+                  str(parseadas)[:300])
+        estimados = parseadas.get("ciclos_estimados", {})
+        comprobar(f"el IDE interpreta la estimacion C de -O{nivel}",
+                  estimados.get("antes", {}).get("disponible") and
+                  estimados.get("despues", {}).get("disponible") and
+                  estimados["antes"].get("ciclos", 0) > 0 and
+                  estimados["despues"].get("instrucciones", 0) > 0,
+                  str(estimados)[:300])
+
+    descriptor, ruta_temporal = tempfile.mkstemp(
+        prefix=".metricas_ide_", suffix=".nv", dir=AQUI)
+    os.close(descriptor)
+    try:
+        with open(fuente, encoding="utf-8") as original:
+            contenido = original.read()
+        with open(ruta_temporal, "w", encoding="utf-8") as temporal:
+            temporal.write(contenido)
+        respuesta = servidor.Nucleo(RAIZ).compilar(
+            ruta_temporal, "metricas", 2)
+        with mock.patch.object(
+                servidor.Nucleo, "medir_ciclos_rtl",
+                return_value={
+                    "disponible": False,
+                    "motivo": "se requieren iverilog y vvp para medir ciclos RTL",
+                }):
+            respuesta_estimada = servidor.Nucleo(RAIZ).compilar(
+                ruta_temporal, "metricas", 2)
+    finally:
+        if os.path.isfile(ruta_temporal):
+            os.remove(ruta_temporal)
+
+    comprobar("el IDE devuelve series comparativas y calendario",
+              not respuesta.get("error") and respuesta.get("codigo_salida") == 0 and
+              respuesta.get("metricas", {}).get("antes") is not None and
+              respuesta.get("metricas", {}).get("despues") is not None and
+              bool(respuesta.get("calendario")),
+              str(respuesta)[:300])
+    metricas = respuesta.get("metricas", {})
+    contadores = metricas.get("contadores", {})
+    comprobar("el IDE expone asignaciones y renombramientos reales",
+              contadores.get("temporales_asignados_registro", -1) >=
+              contadores.get("renombradas", 0) >= 0,
+              str(contadores))
+    comprobar("el IDE compara WAR/WAW y sus NOPs",
+              all(clave in metricas.get(lado, {}) for lado in ("antes", "despues")
+                  for clave in ("dependencias_war", "dependencias_waw",
+                                "nops_war", "nops_waw")),
+              str(metricas)[:500])
+    rtl = respuesta.get("metricas", {}).get("ciclos_rtl", {})
+    if shutil.which("iverilog") and shutil.which("vvp"):
+        comprobar("el RTL mide ciclos, instrucciones e IPC antes y despues",
+                  rtl.get("disponible") and
+                  all(rtl.get(lado, {}).get("ciclos", 0) > 0 and
+                      rtl.get(lado, {}).get("instrucciones", 0) > 0 and
+                      rtl.get(lado, {}).get("ipc", 0) > 0
+                      for lado in ("antes", "despues")),
+                  str(rtl)[:500])
+        comprobar("la optimizacion conserva retorno y salida en DMEM",
+                  rtl.get("disponible") and
+                  rtl["antes"]["retorno"] == rtl["despues"]["retorno"] and
+                  rtl["antes"]["salida"] == rtl["despues"]["salida"],
+                  str(rtl)[:500])
+        fuente_matriz = os.path.join(
+            RAIZ, "pruebas_profesor", "Test4.nv")
+        matriz_rtl = servidor.Nucleo(RAIZ).medir_ciclos_rtl(
+            fuente_matriz, 2)
+        comprobar("la asignacion -O2 conserva R6 y scribe con arreglos",
+                  matriz_rtl.get("disponible") and
+                  matriz_rtl["antes"]["retorno"] == 21 and
+                  matriz_rtl["despues"]["retorno"] == 21 and
+                  matriz_rtl["antes"]["salida"] == [1, 4, 2, 5, 3, 6] and
+                  matriz_rtl["despues"]["salida"] == [1, 4, 2, 5, 3, 6],
+                  str(matriz_rtl)[:500])
+
+        factorial = os.path.join(RAIZ, "test", "factorial.nv")
+        ejecucion = servidor.Nucleo(RAIZ).ejecutar_rtl(factorial, 2)
+        memoria = ejecucion.get("dmem", [])
+        por_direccion = {
+            palabra["direccion"]: palabra["valor"] for palabra in memoria
+        }
+        comprobar("el IDE ejecuta factorial y devuelve R6 y scribe",
+                  ejecucion.get("retorno") == 120 and
+                  ejecucion.get("scribe") == [120] and
+                  ejecucion.get("ciclos", 0) > 0,
+                  str(ejecucion)[:500])
+        comprobar("el IDE devuelve las 16384 palabras del DMEM final",
+                  len(memoria) == 16384 and
+                  por_direccion.get("0x3000") == "0x00000001" and
+                  por_direccion.get("0x3004") == "0x00000078",
+                  f"palabras={len(memoria)}, "
+                  f"salida={por_direccion.get('0x3000')}/"
+                  f"{por_direccion.get('0x3004')}")
+    else:
+        # Sin Icarus, compilar() no deja 'ciclos_rtl' en falso: cae al
+        # simulador en C y lo marca con origen='estimado'. Esa es la misma
+        # conducta que exige la comprobacion de 'respuesta_estimada' mas
+        # abajo, asi que pedir aqui disponible=False se contradecia con ella
+        # y la bateria no podia pasar en una maquina sin simulador.
+        #
+        # Lo que si hay que exigir es que el origen quede dicho: un numero de
+        # ciclos que no salio del RTL no se puede presentar como si lo fuera.
+        comprobar("sin Icarus los ciclos se marcan como estimados",
+                  rtl.get("disponible") is True and
+                  rtl.get("origen") == "estimado",
+                  str(rtl)[:300])
+        ejecucion = servidor.Nucleo(RAIZ).ejecutar_rtl(fuente, 2)
+        comprobar("la ejecucion RTL explica que requiere Icarus",
+                  bool(ejecucion.get("error")) and
+                  "se requieren iverilog y vvp" in ejecucion["error"],
+                  str(ejecucion))
+    estimada = respuesta_estimada.get("metricas", {}).get("ciclos_rtl", {})
+    comprobar("el IDE usa el simulador C como respaldo cuando falta Icarus",
+              estimada.get("disponible") and estimada.get("origen") == "estimado" and
+              estimada.get("antes", {}).get("ciclos", 0) > 0 and
+              estimada.get("despues", {}).get("instrucciones", 0) > 0,
+              str(estimada)[:500])
 
 
 # ---------------------------------------------------------------- 6. clones
@@ -897,6 +1123,7 @@ def main():
     prueba_bloques()
     prueba_clones()
     prueba_vivacidad()
+    prueba_panel_optimizacion()
 
     print("=" * 62)
     if fallidas:

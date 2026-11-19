@@ -1,0 +1,11 @@
+functio contar_hasta(limite : integer) -> integer {
+    varia i : integer = 0;
+    dum (i < limite) {
+        i = i - 1;
+    }
+    redde 9;
+}
+
+functio principale() -> integer {
+    redde contar_hasta(0);
+}

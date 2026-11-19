@@ -1,0 +1,11 @@
+functio principale() -> integer {
+    varia par : integer[2] = {1, 2};
+    varia i : integer = 0;
+    dum (i < 2) {
+        si (i == 1) {
+            feistel(par, 0, 0);
+        }
+        i += 1;
+    }
+    redde 0;
+}

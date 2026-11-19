@@ -54,7 +54,7 @@ static void emitir_conjunto(JsonW *j, const char *clave,
     if (vf != NULL && c != NULL)
         for (n = 0; n < vf->n_nombres; n++)
             if ((c[n / 32] >> (n % 32)) & 1u)
-                jw_item_cadena(j, vf->nombres[n]);
+                jw_item_cadena(j, tac_nombre_fuente(vf->nombres[n]));
     jw_arr_cerrar(j);
 }
 

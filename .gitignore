@@ -1,37 +1,55 @@
-# Lo que genera la construccion
-novac
+# Build products
+/novac
+/novaide
+/factorial
 *.o
 *.d
+__pycache__/
+*.py[cod]
+/fase1_lexico/lex.yy.c
+/fase2_sintactico/nova.tab.c
+/fase2_sintactico/nova.tab.h
 
-# Lo que generan bison y flex
-fase2_sintactico/nova.tab.c
-fase2_sintactico/nova.tab.h
-fase2_sintactico/nova.output
-fase1_lexico/lex.yy.c
+# Generated compiler outputs in the project root
+/*.asm
+/*.hex
+/*.nvx
+/p.s
+/demo_revision.s
+/editor.nv
+/.salida/
+/pruebas_profesor/.salida_arq/
 
-# Temporales de los scripts de prueba
-.tmp_*
-
-# Ejecutables de CERBERO: 'novac programa.nv' deja un binario con el nombre
-# del fuente, sin extension, asi que se ignoran por nombre.
-a.out
-factorial
-saludo
-traza
-mergesort
-multiplicacion
-bits_y_hex
-busqueda_matriz
-desplazamientos
-operadores
-matriz
-estadistica
-convolucion
-rango
-div_cero
-boveda
-cola
-W0[0-9][0-9]_*
-!W0[0-9][0-9]_*.nv
-E[0-9][0-9][0-9]_*
-!E[0-9][0-9][0-9]_*.nv
+# Executables emitted by compiler regression runs without an explicit -o.
+/convolucion
+/matriz_for
+/multiplicar_matrices
+/suma_10_15
+/asignacion_cripto
+/asignacion_division
+/asignacion_presion
+/dce_ciclo_scribe
+/muchos_temporales
+/nova_shift_temporales_*
+!/nova_shift_temporales_*.nv
+/nova_temporales_*
+!/nova_temporales_*.nv
+/nova_w009_scheduler
+/nova_w009_scheduler_single
+/propagacion_scribe
+/prueba
+/renombramiento_llamada
+/renombramiento_war
+/renombramiento_waw
+/reordenamiento_anidado
+/reordenamiento_ciclo
+/reordenamiento_condicional
+/t2_ciclo_muerto
+/t2_propagacion
+/t3_reorden_flags
+/Test1
+/unroll_anidado
+/unroll_constante
+/unroll_grande
+/unroll_variable_400
+/unroll_variable_pequena

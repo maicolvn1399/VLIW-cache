@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <stdint.h>
 #include "semantic.h"
 #include "diag.h"
 
@@ -25,8 +27,6 @@
 static SymbolTable *st = NULL;
 static int loop_depth = 0;
 static Symbol *func_actual = NULL;
-
-#define MAX_ARGS 64
 
 /*
  * Resultado de analizar una expresion. No basta con el DataType: los
@@ -67,6 +67,7 @@ static void decorar_simbolo(Nodo *n, const Symbol *s) {
     if (n == NULL || s == NULL) return;
     Decor *d = nodo_decorar(n);
     d->clase = (int)s->kind;
+    d->simbolo_id = s->id;
     d->tipo = (int)(s->kind == SYMBOL_FUNC ? s->return_type : s->type);
     d->dims = (s->kind == SYMBOL_FUNC) ? s->return_dims : s->dimensions;
     d->filas = s->rows;
@@ -206,7 +207,9 @@ static void leer_dims(Nodo *tipo_nodo, int *dims, int *rows, int *cols, bool *ab
 
     int n = 0;
     int tam[2] = {0, 0};
+    Nodo *ultima_dimension = NULL;
     for (Nodo *d = tipo_nodo->hijo; d != NULL && n < 2; d = d->sig) {
+        ultima_dimension = d;
         if (d->tipo == NODO_DIM_ABIERTA) {
             *abierto = true;
             tam[n] = 0;
@@ -231,6 +234,18 @@ static void leer_dims(Nodo *tipo_nodo, int *dims, int *rows, int *cols, bool *ab
             }
             n++;
         }
+    }
+    if (n == 2 && !*abierto &&
+        (uint64_t)tam[0] * (uint64_t)tam[1] >
+            (uint64_t)INT_MAX / NOVA_PALABRA) {
+        Nodo *expresion = ultima_dimension != NULL
+            ? ultima_dimension->hijo : NULL;
+        diag_error("E318",
+                   expresion != NULL ? expresion->linea : tipo_nodo->linea,
+                   expresion != NULL ? expresion->columna : tipo_nodo->columna,
+                   1, "el tamano total del arreglo excede el rango de memoria representable");
+        tam[0] = 1;
+        tam[1] = 1;
     }
     *dims = n;
     *rows = tam[0];
@@ -643,24 +658,41 @@ static void verificar_rango_boveda(Symbol *f, Nodo **nodos, int nargs) {
 
 static Info analizar_llamada(Nodo *n) {
     Nodo *lista = buscar_hijo(n, NODO_ARGUMENTOS);
+    size_t cantidad = 0;
+    for (Nodo *a = lista ? lista->hijo : NULL; a != NULL; a = a->sig) {
+        if (cantidad == SIZE_MAX) {
+            diag_error("E304", n->linea, n->columna, largo_de(n->texto),
+                       "la llamada a '%s' tiene demasiados argumentos para "
+                       "analizarlos", n->texto);
+            return info_error();
+        }
+        cantidad++;
+    }
+    if (cantidad > INT_MAX) {
+        diag_error("E304", n->linea, n->columna, largo_de(n->texto),
+                   "la llamada a '%s' tiene demasiados argumentos para "
+                   "analizarlos", n->texto);
+        return info_error();
+    }
+    int nargs = (int)cantidad;
+    Info *args = cantidad == 0 ? NULL : calloc(cantidad, sizeof(*args));
+    Nodo **nodos = cantidad == 0 ? NULL : calloc(cantidad, sizeof(*nodos));
+    if (cantidad > 0 && (args == NULL || nodos == NULL)) {
+        free(args);
+        free(nodos);
+        fprintf(stderr, "novac: sin memoria al analizar argumentos\n");
+        exit(3);
+    }
 
     /* Los argumentos se analizan siempre, aunque la firma no calce: los
      * errores que tengan dentro deben reportarse igual. */
-    Info args[MAX_ARGS];
-    Nodo *nodos[MAX_ARGS];
-    int nargs = 0;
+    int indice_arg = 0;
     if (lista != NULL) {
         for (Nodo *a = lista->hijo; a != NULL; a = a->sig) {
-            Info i = analizar_expresion(a);
-            if (nargs < MAX_ARGS) {
-                args[nargs] = i;
-                nodos[nargs] = a;
-            }
-            nargs++;
+            args[indice_arg] = analizar_expresion(a);
+            nodos[indice_arg++] = a;
         }
     }
-    int comparables = nargs < MAX_ARGS ? nargs : MAX_ARGS;
-
     /* Una llamada calificada que sobreviva a la fase de enlace indica una
      * unidad de analisis aislada, por ejemplo el AST de una biblioteca. */
     if (n->modulo != NULL) {
@@ -669,6 +701,8 @@ static Info analizar_llamada(Nodo *n) {
             diag_error("E301", n->linea, n->columna, largo_de(n->modulo),
                        "el modulo '%s' no fue importado", n->modulo);
         }
+        free(args);
+        free(nodos);
         return info_error();
     }
 
@@ -676,14 +710,20 @@ static Info analizar_llamada(Nodo *n) {
     if (f == NULL) {
         diag_error("E301", n->linea, n->columna, largo_de(n->texto),
                    "la funcion '%s' no esta declarada", n->texto);
+        free(args);
+        free(nodos);
         return info_error();
     }
     if (f->kind != SYMBOL_FUNC) {
         diag_error("E313", n->linea, n->columna, largo_de(n->texto),
                    "'%s' es %s, no una funcion",
                    n->texto, symbol_kind_to_string(f->kind));
+        free(args);
+        free(nodos);
         return info_error();
     }
+    int comparables = (f->is_intrinsic && f->is_variadic)
+        ? nargs : (nargs < f->param_count ? nargs : f->param_count);
     f->is_used = true;
 
     if (f->es_obsoleta) {
@@ -694,10 +734,19 @@ static Info analizar_llamada(Nodo *n) {
     }
 
     if (f->is_intrinsic) {
-        if (strcmp(f->name, "longitudo") == 0)
-            return verificar_longitudo(n, args, nodos, comparables);
-        if (f->is_variadic)
-            return verificar_variadica(n, f, args, nodos, comparables);
+        if (strcmp(f->name, "longitudo") == 0) {
+            Info resultado = verificar_longitudo(n, args, nodos, comparables);
+            free(args);
+            free(nodos);
+            return resultado;
+        }
+        if (f->is_variadic) {
+            Info resultado = verificar_variadica(n, f, args, nodos,
+                                                 comparables);
+            free(args);
+            free(nodos);
+            return resultado;
+        }
     }
 
     if (nargs != f->param_count) {
@@ -729,7 +778,10 @@ static Info analizar_llamada(Nodo *n) {
     if (f->is_intrinsic) verificar_rango_boveda(f, nodos, comparables);
 
     decorar_simbolo(n, f);
-    return info_de(f->return_type, f->return_dims);
+    Info resultado = info_de(f->return_type, f->return_dims);
+    free(args);
+    free(nodos);
+    return resultado;
 }
 
 /* --- Operadores -------------------------------------------------------- */
@@ -1371,6 +1423,10 @@ static void analizar_funcion(Nodo *node) {
     if (f->es_cauda) cauda_bloque(cuerpo, true);
 
     revisar_no_usados();
+    if (st->frame_overflowed) {
+        diag_error("E318", st->frame_overflow_line, st->frame_overflow_col, 1,
+                   "el marco local excede el rango de memoria representable");
+    }
     symtab_set_frame_size(f, symtab_frame_size(st));
     if (f->local_frame_size > CERBERO_PILA_BYTES) {
         diag_advertencia("W007", node->linea, node->columna, largo_de(f->name),

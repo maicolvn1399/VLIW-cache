@@ -24,6 +24,7 @@
 #include "bloques.h"
 #include "muerto.h"
 #include "vivacidad.h"
+#include "desenrollado.h"
 
 extern FILE *yyin;
 extern char *yytext;
@@ -68,12 +69,19 @@ static int modo_bloques = 0;
 static int modo_asm = 0;
 static int modo_ensamblar = 0;
 static int modo_paquetes = 0;
+static int modo_calendario = 0;
+static int modo_asignacion = 0;     /* --asignacion: intervalos y derrames */
+static int modo_ciclos = 0;         /* --ciclos: estimacion sobre bundles */
 static int modo_objeto = 0;        /* -c: solo compilar, generar .nvo */
 static int modo_vivacidad = 0;     /* --vivacidad: conjuntos del analisis */
-static int nivel_opt = 0;          /* -O0 / -O1: eliminacion de codigo muerto */
 static int modo_metricas = 0;      /* --metricas: que costo y que se gano */
+static int factor_unroll = 0;      /* cero: heuristica; positivo: --unroll=N */
+static int unroll_explicito = 0;
 static const char *archivo_salida = NULL;
 static clock_t reloj_inicio;       /* para medir el tiempo de compilacion */
+static double ms_fases_1_2;
+static double ms_fase_3;
+static double ms_fase_4_tac;
 
 /* Cuantas instrucciones de tres direcciones tiene la lista. */
 static int contar_tac(const TACList *l) {
@@ -82,6 +90,23 @@ static int contar_tac(const TACList *l) {
     if (l == NULL) return 0;
     for (i = l->head; i != NULL; i = i->next) n++;
     return n;
+}
+
+static void imprimir_resumen_ciclos(FILE *out, const char *etiqueta,
+                                    const CodegenSimulacion *sim) {
+    fprintf(out, "  %s: ", etiqueta);
+    if (!sim->soportado) {
+        fprintf(out, "no soportado: %s\n", sim->motivo);
+        return;
+    }
+    fprintf(out,
+            "ciclos estimados=%llu; bundles ejecutados=%llu; "
+            "instrucciones no-NOP=%llu; IPC estimado=%.3f\n",
+            (unsigned long long)sim->ciclos,
+            (unsigned long long)sim->bundles_ejecutados,
+            (unsigned long long)sim->instrucciones,
+            sim->ciclos > 0
+                ? (double)sim->instrucciones / sim->ciclos : 0.0);
 }
 
 /* -I: directorios donde buscar modulos importados. */
@@ -319,9 +344,13 @@ static void print_usage(const char *prog) {
         "  --ir              Codigo de tres direcciones (Fase 4)\n"
         "  --bloques         Bloques basicos y grafo de flujo de control\n"
         "  --vivacidad       Analisis de vivacidad: USO, DEF, VIVO_ENT, VIVO_SAL\n"
-        "  -O0, -O1          Nivel de optimizacion (0 por omision)\n"
+        "  -O0, -O1, -O2     O1: DCE/propagacion; O2: tambien unrolling, registros y reordenamiento\n"
+        "  --unroll=N        Desenrolla a factor N (activa optimizacion; 1..64)\n"
         "  --optimizar       Equivale a -O1\n"
-        "  --metricas        Que costo optimizar y que se gano\n"
+        "  --metricas        Comparacion antes/despues, tiempos y contadores\n"
+        "  --calendario      Calendario VLIW: slots y dependencias que fuerzan NOPs\n"
+        "  --asignacion      Intervalos, registros asignados y valores derramados\n"
+        "  --ciclos          Simula bundles y estima ciclos, instrucciones e IPC\n"
         "  -s                Genera binario y ensamblador .asm; tambien lo muestra\n"
         "  -x                Ensambla un archivo .s a imagen binaria .hex\n"
         "  -p                Muestra paquetes con slots y codificacion hexadecimal\n"
@@ -344,7 +373,11 @@ static const struct option opciones_largas[] = {
     {"bloques", no_argument, NULL, 1004},
     {"vivacidad", no_argument, NULL, 1005},
     {"metricas",  no_argument, NULL, 1006},
+    {"calendario", no_argument, NULL, 1008},
+    {"asignacion", no_argument, NULL, 1010},
+    {"ciclos", no_argument, NULL, 1011},
     {"optimizar", no_argument, NULL, 1007},
+    {"unroll", required_argument, NULL, 1009},
     {"version", no_argument, NULL, 1002},
     {"max-errors", required_argument, NULL, 1003},
     {"help",    no_argument, NULL, 'h'},
@@ -379,14 +412,34 @@ int main(int argc, char **argv) {
             case 1004: modo_bloques = 1; break;
             case 1005: modo_vivacidad = 1; break;
             case 1006: modo_metricas = 1; break;
+            case 1008: modo_calendario = 1; break;
+            case 1010: modo_asignacion = 1; break;
+            case 1011: modo_ciclos = 1; break;
+            case 1009: {
+                char *fin = NULL;
+                long n;
+                errno = 0;
+                n = strtol(optarg, &fin, 10);
+                if (errno != 0 || fin == optarg || *fin != '\0' ||
+                    n < 1 || n > 64) {
+                    fprintf(stderr,
+                            "novac: valor invalido para --unroll: '%s' "
+                            "(se espera un entero entre 1 y 64)\n", optarg);
+                    return 2;
+                }
+                factor_unroll = (int)n;
+                unroll_explicito = 1;
+                break;
+            }
             case 1007: nivel_opt = 1; break;
             case 'O':
-                /* -O0 y -O1. getopt entrega lo que sigue a -O. */
+                /* -O2 mantiene las optimizaciones de TAC habilitadas. */
                 if (strcmp(optarg, "0") == 0) nivel_opt = 0;
                 else if (strcmp(optarg, "1") == 0) nivel_opt = 1;
+                else if (strcmp(optarg, "2") == 0) nivel_opt = 2;
                 else {
                     fprintf(stderr, "novac: nivel de optimizacion desconocido: "
-                                    "'-O%s' (se espera -O0 o -O1)\n", optarg);
+                                    "'-O%s' (se espera -O0, -O1 o -O2)\n", optarg);
                     return 2;
                 }
                 break;
@@ -423,6 +476,7 @@ int main(int argc, char **argv) {
             default: print_usage(argv[0]); return 2;
         }
     }
+    if (unroll_explicito && nivel_opt == 0) nivel_opt = 2;
 
     if (optind >= argc) {
         print_usage(argv[0]);
@@ -434,7 +488,7 @@ int main(int argc, char **argv) {
     if (modo_ensamblar) {
         if (extra_count > 0 || modo_objeto || modo_lexer || modo_arbol ||
             modo_symtab || modo_ir || modo_bloques || modo_vivacidad ||
-            modo_asm || modo_paquetes) {
+            modo_asm || modo_paquetes || modo_calendario || unroll_explicito) {
             fprintf(stderr, "novac: -x recibe un solo .s y no se combina con opciones de inspeccion o -c\n");
             return 2;
         }
@@ -458,7 +512,8 @@ int main(int argc, char **argv) {
         return 2;
     }
     if ((modo_lexer || modo_arbol || modo_symtab || modo_ir || modo_bloques ||
-         modo_vivacidad || modo_asm || modo_paquetes) && extra_count > 0) {
+         modo_vivacidad || modo_asm || modo_paquetes || modo_calendario) &&
+        extra_count > 0) {
         fprintf(stderr, "novac: las opciones de inspeccion reciben un solo archivo\n");
         return 2;
     }
@@ -493,7 +548,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "   (a demanda del parser; --tokens la corre sola)\n");
         fprintf(stderr, "== Fase 2: Analisis Sintactico -- %s ==\n", archivo_fuente);
     }
+    clock_t reloj_fase = clock();
     int rc = parse_source(archivo_fuente, &raiz_ast);
+    ms_fases_1_2 = 1000.0 * (double)(clock() - reloj_fase) / CLOCKS_PER_SEC;
 
     if (rc != 0 || diag_errores() > 0) {
         /* Con recuperacion de errores yyparse puede devolver 0 aunque haya
@@ -534,10 +591,13 @@ int main(int argc, char **argv) {
      */
     if (modo_verbose) fprintf(stderr, "== Fase 3: Analisis Semantico -- %s ==\n", archivo_fuente);
 
+    reloj_fase = clock();
     if (!modo_arbol && (modo_objeto || modo_symtab || modo_ir || modo_bloques ||
                         modo_vivacidad || modo_asm || modo_paquetes ||
+                        modo_calendario ||
                         (!modo_arbol && !modo_symtab && !modo_ir && !modo_bloques &&
-                         !modo_vivacidad && !modo_asm && !modo_paquetes))) {
+                         !modo_vivacidad && !modo_asm && !modo_paquetes &&
+                         !modo_calendario))) {
         if (!link_modules(raiz_ast, archivo_fuente, extra_paths, extra_count)) {
             liberar_ast(raiz_ast);
             release_modules();
@@ -548,6 +608,7 @@ int main(int argc, char **argv) {
 
     SymbolTable *tabla = NULL;
     bool sem_ok = semantic_analyze(raiz_ast, &tabla);
+    ms_fase_3 = 1000.0 * (double)(clock() - reloj_fase) / CLOCKS_PER_SEC;
 
     if (!sem_ok) {
         symtab_destroy(tabla);
@@ -565,17 +626,14 @@ int main(int argc, char **argv) {
         TACList *layout_tac = tac_generate_from_ast(raiz_ast, tabla);
         bool layout_ok;
         /*
-         * El layout se mide sobre el MISMO codigo que se va a generar. Si se
-         * esta compilando con -O1 hay que optimizar tambien esta copia: quitar
-         * instrucciones acorta los rangos de vida de los temporales y puede
-         * cambiar el marco, y con el las direcciones que imprime --sym. Sin
-         * esto, la tabla de simbolos describiria un programa distinto del que
-         * sale en el binario.
-         *
-         * Se pasa avisar=0 porque las advertencias W010 ya salen de la pasada
-         * real; aqui se duplicarian.
+         * El layout se mide sobre el MISMO TAC transformado que se va a
+         * calendarizar. Se desenrolla antes del DCE, igual que en la pasada
+         * real, pero sin repetir sus advertencias W010.
          */
-        if (nivel_opt > 0) muerto_eliminar(layout_tac, NULL, 0);
+        if (nivel_opt > 0) {
+            if (nivel_opt >= 2) unroll_aplicar(layout_tac, factor_unroll);
+            muerto_eliminar(layout_tac, NULL, 0, nivel_opt);
+        }
         layout_ok = codegen_update_symbol_layout(layout_tac, tabla);
         tac_free(layout_tac);
         if (!layout_ok) {
@@ -663,18 +721,52 @@ int main(int argc, char **argv) {
      * reemplazan al binario para poder revisar la fase por partes.
      */
     int modo_binario = (!modo_ir && !modo_bloques && !modo_vivacidad &&
-                        !modo_arbol && !modo_symtab && !modo_paquetes);
+                        !modo_arbol && !modo_symtab && !modo_paquetes &&
+                        !modo_calendario && !modo_asignacion && !modo_ciclos);
 
     if (modo_ir || modo_bloques || modo_vivacidad || modo_asm || modo_paquetes ||
-        modo_binario) {
+        modo_calendario || modo_asignacion || modo_ciclos || modo_binario) {
         if (modo_verbose) fprintf(stderr, "== Fase 4: Generacion de codigo -- %s ==\n", archivo_fuente);
 
+        clock_t reloj_tac = clock();
         TACList *tac = tac_generate_from_ast(raiz_ast, tabla);
+        ms_fase_4_tac = 1000.0 * (double)(clock() - reloj_tac) / CLOCKS_PER_SEC;
         bool gen_ok = true;
         ReporteMuerto rep_muerto;
         double ms_opt = 0.0;
+        double ms_codegen = 0.0;
+        int instrucciones_antes = contar_tac(tac);
+        CodegenEstadisticas ce_antes = {0};
+        int tiene_ce_antes = 0;
+        CodegenSimulacion ciclos_antes = {0};
+        CodegenSimulacion ciclos_despues = {0};
+        int tiene_ciclos_antes = 0;
+        int tiene_ciclos_despues = 0;
 
         memset(&rep_muerto, 0, sizeof(rep_muerto));
+
+        if (modo_metricas) {
+            clock_t reloj_medicion = clock();
+            TACList *tac_antes = tac_generate_from_ast(raiz_ast, tabla);
+            if (tac_antes == NULL ||
+                !codegen_measure_vliw(tac_antes, &ce_antes)) {
+                fprintf(stderr, "novac: no se pudo medir el codigo previo a optimizar\n");
+                gen_ok = false;
+            } else {
+                tiene_ce_antes = 1;
+            }
+            if (tac_antes != NULL) {
+                if (!codegen_simular_vliw(tac_antes, &ciclos_antes)) {
+                    fprintf(stderr, "novac: no se pudo simular el TAC previo a optimizar\n");
+                    gen_ok = false;
+                } else {
+                    tiene_ciclos_antes = 1;
+                }
+            }
+            tac_free(tac_antes);
+            ms_codegen += 1000.0 * (double)(clock() - reloj_medicion) /
+                          CLOCKS_PER_SEC;
+        }
 
         /*
          * Fase 6: optimizacion sobre el codigo intermedio.
@@ -687,13 +779,57 @@ int main(int argc, char **argv) {
          */
         if (nivel_opt > 0) {
             clock_t t0 = clock();
+            int bucles_desplegados = 0;
             if (modo_verbose)
                 fprintf(stderr, "== Fase 6: Optimizacion (-O%d) -- %s ==\n",
                         nivel_opt, archivo_fuente);
-            muerto_eliminar(tac, &rep_muerto, 1);
+            if (nivel_opt >= 2)
+                bucles_desplegados = unroll_aplicar(tac, factor_unroll);
+            muerto_eliminar(tac, &rep_muerto, 1, nivel_opt);
+            rep_muerto.bucles_desplegados = bucles_desplegados;
             ms_opt = 1000.0 * (double)(clock() - t0) / CLOCKS_PER_SEC;
         }
 
+        if (modo_ciclos || modo_metricas) {
+            if (!codegen_simular_vliw(tac, &ciclos_despues)) {
+                fprintf(stderr, "novac: no se pudo simular el TAC posterior a optimizar\n");
+                gen_ok = false;
+            } else {
+                tiene_ciclos_despues = 1;
+            }
+        }
+
+        if (modo_ciclos && !modo_metricas) {
+            if (!tiene_ciclos_despues) {
+                gen_ok = false;
+            } else if (!ciclos_despues.soportado) {
+                printf("no soportado: %s\n", ciclos_despues.motivo);
+            } else {
+                printf("Ciclos estimados por simulador C:\n");
+                imprimir_resumen_ciclos(stdout, "DESPUES", &ciclos_despues);
+            }
+        }
+
+        if (modo_asignacion) {
+            FILE *salida = stdout;
+            if (archivo_salida != NULL) {
+                salida = fopen(archivo_salida, "w");
+                if (salida == NULL) {
+                    fprintf(stderr, "novac: no se pudo escribir el informe '%s'\n",
+                            archivo_salida);
+                    tac_free(tac);
+                    symtab_destroy(tabla);
+                    liberar_ast(raiz_ast);
+                    release_modules();
+                    return 3;
+                }
+            }
+            fprintf(salida, "Asignacion sobre TAC posterior a -O%d\n", nivel_opt);
+            if (!codegen_print_allocation(tac, salida)) gen_ok = false;
+            if (salida != stdout && fclose(salida) != 0) gen_ok = false;
+        }
+
+        clock_t reloj_emision = clock();
         if (modo_ir) {
             FILE *salida = stdout;
             if (archivo_salida != NULL) {
@@ -827,6 +963,23 @@ int main(int argc, char **argv) {
             if (!codegen_print_packages(tac, tabla, salida)) gen_ok = false;
             if (salida != stdout && fclose(salida) != 0) gen_ok = false;
         }
+        if (modo_calendario) {
+            FILE *salida = stdout;
+            if (archivo_salida != NULL) {
+                salida = fopen(archivo_salida, "w");
+                if (salida == NULL) {
+                    fprintf(stderr, "novac: no se pudo escribir el calendario '%s'\n",
+                            archivo_salida);
+                    tac_free(tac);
+                    symtab_destroy(tabla);
+                    liberar_ast(raiz_ast);
+                    release_modules();
+                    return 3;
+                }
+            }
+            if (!codegen_print_calendar(tac, tabla, salida)) gen_ok = false;
+            if (salida != stdout && fclose(salida) != 0) gen_ok = false;
+        }
         if (modo_binario) {
             /* El binario nunca va a pantalla: siempre a un archivo. */
             char nombre[256];
@@ -851,6 +1004,8 @@ int main(int argc, char **argv) {
         }
 
         if (modo_metricas) {
+            ms_codegen += 1000.0 * (double)(clock() - reloj_emision) /
+                          CLOCKS_PER_SEC;
             /*
              * Metricas de compilacion. Las de ejecucion no se pueden medir
              * aqui: las entregan los contadores del procesador al correr el
@@ -874,11 +1029,13 @@ int main(int argc, char **argv) {
                    1000.0 * (double)(clock() - reloj_inicio) / CLOCKS_PER_SEC);
             if (nivel_opt > 0)
                 printf("  del cual, la fase 6:               %.2f ms\n", ms_opt);
+            int instrucciones_despues = contar_tac(tac);
             printf("  instrucciones de tres direcciones: %d\n",
-                   nivel_opt > 0 ? rep_muerto.inst_despues
-                                 : contar_tac(tac));
+                   instrucciones_despues);
             if (nivel_opt > 0) {
                 int quitadas = rep_muerto.inst_antes - rep_muerto.inst_despues;
+                printf("    bucles desplegados antes del DCE: %d\n",
+                       rep_muerto.bucles_desplegados);
                 printf("    antes de optimizar:              %d\n",
                        rep_muerto.inst_antes);
                 printf("    eliminadas:                      %d (%.1f%%)\n",
@@ -893,9 +1050,92 @@ int main(int argc, char **argv) {
                        rep_muerto.definiciones_muertas);
                 printf("      resultados de llamada sueltos: %d\n",
                        rep_muerto.resultados_descartados);
+                printf("      definiciones sin raiz:          %d\n",
+                       rep_muerto.definiciones_sin_raiz);
+                printf("    constantes plegadas:              %d\n",
+                       rep_muerto.constantes_plegadas);
+                printf("    valores propagados:                %d\n",
+                       rep_muerto.valores_propagados);
+                printf("    reducciones de fuerza:             %d\n",
+                       rep_muerto.reducciones_fuerza);
                 printf("    rondas hasta el punto fijo:      %d\n",
                        rep_muerto.rondas);
             }
+            printf("  tiempo fase 1-2 (lexico/sintactico): %.2f ms\n",
+                   ms_fases_1_2);
+            printf("  tiempo fase 3 (semantica/enlace):    %.2f ms\n",
+                   ms_fase_3);
+            printf("  tiempo fase 4 (generacion TAC):      %.2f ms\n",
+                   ms_fase_4_tac);
+            printf("  tiempo fase 4 (backend VLIW):        %.2f ms\n",
+                   ms_codegen);
+            printf("  tiempo fase 6 (optimizacion):        %.2f ms\n",
+                   ms_opt);
+
+            CodegenEstadisticas ce_despues;
+            memset(&ce_despues, 0, sizeof(ce_despues));
+            codegen_estadisticas(&ce_despues);
+            printf("=== Comparacion antes/despues ===\n");
+            printf("  ANTES\n");
+            printf("    instrucciones TAC:                 %d\n",
+                   instrucciones_antes);
+            if (tiene_ce_antes) {
+                printf("    instrucciones finales no-NOP:       %d\n",
+                       ce_antes.slots_usados);
+                printf("    bundles:                            %d\n",
+                       ce_antes.bundles);
+                printf("    bytes de codigo:                    %d\n",
+                       ce_antes.bundles * 16);
+                printf("    ocupacion:                          %.1f%% (%d/%d slots)\n",
+                       ce_antes.bundles > 0
+                           ? 100.0 * ce_antes.slots_usados /
+                                 (ce_antes.bundles * 5) : 0.0,
+                       ce_antes.slots_usados, ce_antes.bundles * 5);
+                printf("    dependencias WAR:                   %d\n",
+                       ce_antes.dependencias_war);
+                printf("    dependencias WAW:                   %d\n",
+                       ce_antes.dependencias_waw);
+                printf("    NOPs por dependencia WAR:           %d\n",
+                       ce_antes.nops_war);
+                printf("    NOPs por dependencia WAW:           %d\n",
+                       ce_antes.nops_waw);
+            }
+            printf("  DESPUES\n");
+            printf("    instrucciones TAC:                 %d\n",
+                   instrucciones_despues);
+            printf("    instrucciones finales no-NOP:       %d\n",
+                   ce_despues.slots_usados);
+            printf("    bundles:                            %d\n",
+                   ce_despues.bundles);
+            printf("    bytes de codigo:                    %d\n",
+                   ce_despues.bundles * 16);
+            printf("    ocupacion:                          %.1f%% (%d/%d slots)\n",
+                   ce_despues.bundles > 0
+                       ? 100.0 * ce_despues.slots_usados /
+                             (ce_despues.bundles * 5) : 0.0,
+                   ce_despues.slots_usados, ce_despues.bundles * 5);
+            printf("    dependencias WAR:                   %d\n",
+                   ce_despues.dependencias_war);
+            printf("    dependencias WAW:                   %d\n",
+                   ce_despues.dependencias_waw);
+            printf("    NOPs por dependencia WAR:           %d\n",
+                   ce_despues.nops_war);
+            printf("    NOPs por dependencia WAW:           %d\n",
+                   ce_despues.nops_waw);
+            printf("=== Contadores de optimizacion ===\n");
+            printf("  eliminadas:                         %d\n",
+                   nivel_opt > 0
+                       ? rep_muerto.inst_antes - rep_muerto.inst_despues : 0);
+            printf("  reordenadas:                        %d\n",
+                   ce_despues.instrucciones_reordenadas);
+            printf("  renombradas:                        %d\n",
+                   ce_despues.renombradas);
+            printf("  temporales asignados a registro:    %d\n",
+                   ce_despues.temporales_asignados_registro);
+            printf("  derramadas:                         %d\n",
+                   ce_despues.temporales_derramados);
+            printf("  bucles desenrollados:               %d\n",
+                   rep_muerto.bucles_desplegados);
             printf("  bloques basicos:                   %d\n", bloques);
             printf("  aristas del grafo:                 %d\n", aristas);
             printf("  bloques inalcanzables que quedan:  %d\n", inalcanzables);
@@ -921,6 +1161,27 @@ int main(int argc, char **argv) {
                            ce.bundles_vacios,
                            ce.bundles > 0
                                ? 100.0 * ce.bundles_vacios / ce.bundles : 0.0);
+                }
+            }
+            if (tiene_ciclos_antes || tiene_ciclos_despues) {
+                printf("=== Simulacion de ciclos (estimada por C) ===\n");
+                /* La etiqueta decia "ANTES (-O0)" y era falsa: 'tac_antes' es
+                   el TAC previo a la fase 6, pero pasa por el MISMO backend
+                   que la corrida actual, con su asignacion de registros y su
+                   calendarizacion. No es una compilacion en -O0 y no da sus
+                   numeros: para unroll_constante.nv esta linea decia 237
+                   ciclos y compilar de verdad en -O0 da 259.
+                   Lo que aisla es el efecto de la fase 6 sola, que es util,
+                   pero hay que llamarlo por su nombre. Para comparar contra
+                   -O0 de verdad hay que compilar en cada nivel por separado. */
+                if (tiene_ciclos_antes)
+                    imprimir_resumen_ciclos(stdout, "ANTES (sin fase 6, mismo backend)",
+                                            &ciclos_antes);
+                if (tiene_ciclos_despues) {
+                    char etiqueta[32];
+                    snprintf(etiqueta, sizeof(etiqueta), "DESPUES (-O%d)",
+                             nivel_opt);
+                    imprimir_resumen_ciclos(stdout, etiqueta, &ciclos_despues);
                 }
             }
         }

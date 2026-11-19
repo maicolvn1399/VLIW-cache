@@ -1,0 +1,5 @@
+importa "modulos/no_existe.nv" ut ausente;
+
+functio principale() -> integer {
+    redde 0;
+}

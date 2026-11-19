@@ -13,10 +13,13 @@ Desde la raíz del proyecto:
 
 ```sh
 make                                    # construye el compilador
-sh pruebas_profesor/correr.sh           # las seis sobre el RTL de CERBERO
+sh pruebas_profesor/correr.sh           # las seis con -O0, -O1 y -O2
 ```
 
-Termina con `6 de 6 coinciden con el original en Python; 0 fallan`.
+El informe tabula ciclos e IPC por programa y nivel, y comprueba R6 y toda la
+salida de `scribe`. Termina con:
+
+`18 de 18 corridas coinciden con R6 y scribe; 0 fallan`
 
 Una sola, para mostrarla con calma:
 

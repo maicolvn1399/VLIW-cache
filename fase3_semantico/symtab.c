@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include "symtab.h"
+#include "../fase1_lexico/diag.h"
 
 /* --- Utilidades internas ------------------------------------------------ */
 
@@ -25,11 +27,75 @@ static char *xstrdup(const char *s) {
     return d;
 }
 
+static uint64_t hash_nombre(const char *nombre) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (const unsigned char *p = (const unsigned char *)nombre; *p; p++) {
+        hash ^= *p;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static void redimensionar_hash_ambito(Scope *scope, size_t capacidad) {
+    Symbol **cubetas;
+    if (capacidad < 32 || (capacidad & (capacidad - 1)) != 0 ||
+        capacidad > SIZE_MAX / sizeof(*cubetas))
+        sin_memoria();
+    cubetas = calloc(capacidad, sizeof(*cubetas));
+    if (cubetas == NULL) sin_memoria();
+
+    for (size_t i = 0; i < scope->hash_capacity; i++) {
+        Symbol *simbolo = scope->hash_buckets[i];
+        if (simbolo == NULL) continue;
+        size_t pos = (size_t)hash_nombre(simbolo->name) & (capacidad - 1);
+        while (cubetas[pos] != NULL) pos = (pos + 1) & (capacidad - 1);
+        cubetas[pos] = simbolo;
+    }
+    free(scope->hash_buckets);
+    scope->hash_buckets = cubetas;
+    scope->hash_capacity = capacidad;
+}
+
+static size_t posicion_hash_ambito(const Scope *scope, const char *nombre) {
+    size_t pos = (size_t)hash_nombre(nombre) & (scope->hash_capacity - 1);
+    while (scope->hash_buckets[pos] != NULL &&
+           strcmp(scope->hash_buckets[pos]->name, nombre) != 0)
+        pos = (pos + 1) & (scope->hash_capacity - 1);
+    return pos;
+}
+
+static Symbol *buscar_hash_ambito(const Scope *scope, const char *nombre) {
+    if (scope == NULL || scope->hash_capacity == 0 || nombre == NULL)
+        return NULL;
+    size_t pos = posicion_hash_ambito(scope, nombre);
+    return scope->hash_buckets[pos];
+}
+
+static void insertar_hash_ambito(Scope *scope, Symbol *simbolo) {
+    if (scope->hash_capacity == 0) redimensionar_hash_ambito(scope, 32);
+    size_t pos = posicion_hash_ambito(scope, simbolo->name);
+    if (scope->hash_buckets[pos] != NULL) {
+        scope->hash_buckets[pos] = simbolo;
+        return;
+    }
+    if (scope->hash_count >=
+        scope->hash_capacity - scope->hash_capacity / 4) {
+        if (scope->hash_capacity > SIZE_MAX / 2) sin_memoria();
+        redimensionar_hash_ambito(scope, scope->hash_capacity * 2);
+        pos = posicion_hash_ambito(scope, simbolo->name);
+    }
+    scope->hash_buckets[pos] = simbolo;
+    scope->hash_count++;
+}
+
 /* Redondea hacia arriba al multiplo de palabra: CERBERO accede DMEM por
  * palabras alineadas de 32 bits. */
 static int alinear(int bytes) {
     int r = bytes % NOVA_PALABRA;
-    return r == 0 ? bytes : bytes + (NOVA_PALABRA - r);
+    if (r == 0) return bytes;
+    if (bytes > INT_MAX - (NOVA_PALABRA - r))
+        return INT_MAX - (INT_MAX % NOVA_PALABRA);
+    return bytes + (NOVA_PALABRA - r);
 }
 
 /*
@@ -46,7 +112,10 @@ static int tamano_en_bytes(int dims, int rows, int cols, bool abierto) {
     if (dims == 0) return NOVA_PALABRA;
     if (abierto) return NOVA_PALABRA * (1 + dims);   /* 1D: 8, 2D: 12 */
     if (dims == 1) return alinear(rows * NOVA_PALABRA);
-    return alinear(rows * cols * NOVA_PALABRA);
+    uint64_t bytes = (uint64_t)rows * (uint64_t)cols * NOVA_PALABRA;
+    if (bytes > (uint64_t)INT_MAX)
+        return INT_MAX - (INT_MAX % NOVA_PALABRA);
+    return alinear((int)bytes);
 }
 
 const char *data_type_to_string(DataType type) {
@@ -84,6 +153,7 @@ const char *tipo_con_dims(char *buf, size_t n, DataType t, int dims) {
 static void registrar_entrada(SymbolTable *st, Symbol *s) {
     Entrada *e = xmalloc(sizeof(Entrada));
     e->name = xstrdup(s->name);
+    e->id = s->id;
     e->ambito = xstrdup(st->ambito_actual ? st->ambito_actual : "global");
     e->level = st->current_scope ? st->current_scope->level : 0;
     e->kind = s->kind;
@@ -237,6 +307,9 @@ void symtab_push_scope(SymbolTable *st) {
     Scope *s = xmalloc(sizeof(Scope));
     s->level = st->current_scope ? st->current_scope->level + 1 : 0;
     s->symbols = NULL;
+    s->hash_buckets = NULL;
+    s->hash_capacity = 0;
+    s->hash_count = 0;
     s->offset_guardado = st->local_memory_offset;
     s->parent = st->current_scope;
     st->current_scope = s;
@@ -264,6 +337,7 @@ void symtab_pop_scope(SymbolTable *st) {
         free(s);
         s = sig;
     }
+    free(viejo->hash_buckets);
     free(viejo);
 }
 
@@ -279,15 +353,14 @@ Symbol *symtab_simbolos_ambito(const SymbolTable *st) {
 
 Symbol *symtab_lookup_current_scope(SymbolTable *st, const char *name) {
     if (st->current_scope == NULL) return NULL;
-    for (Symbol *s = st->current_scope->symbols; s != NULL; s = s->next)
-        if (strcmp(s->name, name) == 0) return s;
-    return NULL;
+    return buscar_hash_ambito(st->current_scope, name);
 }
 
 Symbol *symtab_lookup(SymbolTable *st, const char *name) {
-    for (Scope *sc = st->current_scope; sc != NULL; sc = sc->parent)
-        for (Symbol *s = sc->symbols; s != NULL; s = s->next)
-            if (strcmp(s->name, name) == 0) return s;
+    for (Scope *sc = st->current_scope; sc != NULL; sc = sc->parent) {
+        Symbol *simbolo = buscar_hash_ambito(sc, name);
+        if (simbolo != NULL) return simbolo;
+    }
     return NULL;
 }
 
@@ -295,9 +368,10 @@ Symbol *symtab_lookup(SymbolTable *st, const char *name) {
  * declaracion esta ocultando otra. */
 Symbol *symtab_lookup_exterior(SymbolTable *st, const char *name) {
     if (st->current_scope == NULL) return NULL;
-    for (Scope *sc = st->current_scope->parent; sc != NULL; sc = sc->parent)
-        for (Symbol *s = sc->symbols; s != NULL; s = s->next)
-            if (strcmp(s->name, name) == 0) return s;
+    for (Scope *sc = st->current_scope->parent; sc != NULL; sc = sc->parent) {
+        Symbol *simbolo = buscar_hash_ambito(sc, name);
+        if (simbolo != NULL) return simbolo;
+    }
     return NULL;
 }
 
@@ -306,10 +380,12 @@ Symbol *symtab_lookup_exterior(SymbolTable *st, const char *name) {
 static Symbol *nuevo_simbolo(SymbolTable *st, const char *name, int line, int col) {
     Symbol *s = xmalloc(sizeof(Symbol));
     s->name = xstrdup(name);
+    s->id = ++st->next_symbol_id;
     s->line = line;
     s->col = col;
     s->next = st->current_scope->symbols;
     st->current_scope->symbols = s;
+    insertar_hash_ambito(st->current_scope, s);
     return s;
 }
 
@@ -318,7 +394,11 @@ static Symbol *nuevo_simbolo(SymbolTable *st, const char *name, int line, int co
  * desplazamiento negativo respecto de R14, porque la pila de CERBERO crece
  * hacia direcciones menores desde 0xFFFC. */
 static void asignar_memoria(SymbolTable *st, Symbol *s) {
-    s->size_bytes = tamano_en_bytes(s->dimensions, s->rows, s->cols, s->abierto);
+    if (s->kind == SYMBOL_PARAM && s->dimensions > 0)
+        s->size_bytes = NOVA_PALABRA * (1 + s->dimensions);
+    else
+        s->size_bytes = tamano_en_bytes(s->dimensions, s->rows, s->cols,
+                                        s->abierto);
 
     if (st->current_scope->level == 0) {
         s->is_global = true;
@@ -328,7 +408,17 @@ static void asignar_memoria(SymbolTable *st, Symbol *s) {
             st->globales_desbordadas = true;
     } else {
         s->is_global = false;
-        st->local_memory_offset += s->size_bytes;
+        int max_offset = INT_MAX - (INT_MAX % NOVA_PALABRA);
+        if (s->size_bytes > max_offset - st->local_memory_offset) {
+            if (!st->frame_overflowed) {
+                st->frame_overflow_line = s->line;
+                st->frame_overflow_col = s->col;
+            }
+            st->frame_overflowed = true;
+            st->local_memory_offset = max_offset;
+        } else {
+            st->local_memory_offset += s->size_bytes;
+        }
         s->offset = -(int32_t)st->local_memory_offset;
         if (st->local_memory_offset > st->max_local_offset)
             st->max_local_offset = st->local_memory_offset;
@@ -426,15 +516,13 @@ void symtab_set_frame_size(Symbol *f, int bytes) {
     if (f->entrada != NULL) f->entrada->local_frame_size = bytes;
 }
 
-void symtab_set_frame_offset(SymbolTable *st, const char *function,
-                             const char *name, int offset) {
-    if (st == NULL || function == NULL || name == NULL) return;
+void symtab_set_frame_offset(SymbolTable *st, uint64_t symbol_id, int offset) {
+    if (st == NULL || symbol_id == 0) return;
     for (Entrada *e = st->listado; e != NULL; e = e->next) {
-        if (!e->is_global && e->kind != SYMBOL_FUNC &&
-            e->ambito != NULL && strcmp(e->ambito, function) == 0 &&
-            e->name != NULL && strcmp(e->name, name) == 0) {
+        if (e->id == symbol_id && !e->is_global && e->kind != SYMBOL_FUNC) {
             e->frame_offset = offset;
             e->has_frame_offset = true;
+            return;
         }
     }
 }
@@ -450,15 +538,14 @@ void symtab_set_frame_total(SymbolTable *st, const char *function, int bytes) {
     }
 }
 
-void symtab_set_data_address(SymbolTable *st, const char *function,
-                             const char *name, uint32_t address) {
-    if (st == NULL || function == NULL || name == NULL) return;
+void symtab_set_data_address(SymbolTable *st, uint64_t symbol_id,
+                             uint32_t address) {
+    if (st == NULL || symbol_id == 0) return;
     for (Entrada *e = st->listado; e != NULL; e = e->next) {
-        if (!e->is_global && e->kind != SYMBOL_FUNC &&
-            e->ambito != NULL && strcmp(e->ambito, function) == 0 &&
-            e->name != NULL && strcmp(e->name, name) == 0) {
+        if (e->id == symbol_id && !e->is_global && e->kind != SYMBOL_FUNC) {
             e->data_address = address;
             e->has_data_address = true;
+            return;
         }
     }
 }
@@ -480,6 +567,9 @@ void symtab_set_function_address(SymbolTable *st, const char *function,
 void symtab_reset_frame(SymbolTable *st) {
     st->local_memory_offset = 0;
     st->max_local_offset = 0;
+    st->frame_overflowed = false;
+    st->frame_overflow_line = 0;
+    st->frame_overflow_col = 0;
 }
 
 int symtab_frame_size(const SymbolTable *st) {
