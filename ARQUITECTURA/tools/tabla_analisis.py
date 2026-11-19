@@ -192,15 +192,19 @@ def tablas(datos):
            "`make analisis`.", ""]
 
     out += ["## 1. Con L2 contra sin L2", "",
-            "L1 de 4 KB en las dos. Aceleracion = ciclos sin L2 / ciclos con L2.", ""]
+            "L1 de 4 KB en las dos. Aceleracion = ciclos sin L2 / ciclos con L2. "
+            "El programa es el mismo binario en las dos, asi que la razon de IPC "
+            "es la misma aceleracion vista desde las instrucciones.", ""]
     out += encabezado(["programa", "ciclos con L2", "ciclos sin L2", "aceleracion",
+                       "IPC con L2", "IPC sin L2",
                        "AMAT con L2", "AMAT sin L2", "aciertos L1",
                        "aciertos L2 (lect.)"],
-                      [":---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"])
+                      [":---"] + ["---:"] * 9)
     for p in progs:
         b, s = base[p], sin[p]
         out.append(fila([f"`{p}`", miles(b["ciclos"]), miles(s["ciclos"]),
                          f"{s['ciclos'] / b['ciclos']:.2f}x",
+                         f"{b['ipc']:.3f}", f"{s['ipc']:.3f}",
                          f"{b['amat_med']:.2f}", f"{s['amat_med']:.2f}",
                          f"{tasa_l1(b):.2f} %", f"{tasa_l2(b):.2f} %"]))
 
@@ -230,7 +234,7 @@ def tablas(datos):
                          miles(b["st_miss"] + b["st_wb"] + b["st_raw"])]))
 
     out += ["", "## 4. Capacidad de L1 (2 vias, L2 de 16 KB)", "",
-            "Tasa de aciertos de lectura de L1, y ciclos de ejecucion.", ""]
+            "Tasa de aciertos de lectura de L1, ciclos de ejecucion e IPC.", ""]
     caps = [etiqueta_l1(datos[c][PATRONES[0]]["l1_bytes"]) for c in CURVA_L1]
     out += encabezado(["programa"] + caps, [":---"] + ["---:"] * len(caps))
     for p in PATRONES:
@@ -238,10 +242,12 @@ def tablas(datos):
                         [f"{tasa_l1(datos[c][p]):.2f} %" for c in CURVA_L1]))
         out.append(fila([f"`{p}` ciclos"] +
                         [miles(datos[c][p]["ciclos"]) for c in CURVA_L1]))
+        out.append(fila([f"`{p}` IPC"] +
+                        [f"{datos[c][p]['ipc']:.3f}" for c in CURVA_L1]))
 
     out += ["", "## 5. Capacidad de L2 (4 vias, L1 de 4 KB)", "",
-            "Tasa de aciertos de lectura de L2 (local), ciclos de ejecucion e "
-            "invalidaciones hacia atras.", ""]
+            "Tasa de aciertos de lectura de L2 (local), ciclos de ejecucion, IPC "
+            "e invalidaciones hacia atras.", ""]
     caps = [f"{datos[c][PATRONES[0]]['l2_kb']} KB" for c in CURVA_L2]
     out += encabezado(["programa"] + caps, [":---"] + ["---:"] * len(caps))
     for p in PATRONES:
@@ -249,6 +255,8 @@ def tablas(datos):
                         [f"{tasa_l2(datos[c][p]):.2f} %" for c in CURVA_L2]))
         out.append(fila([f"`{p}` ciclos"] +
                         [miles(datos[c][p]["ciclos"]) for c in CURVA_L2]))
+        out.append(fila([f"`{p}` IPC"] +
+                        [f"{datos[c][p]['ipc']:.3f}" for c in CURVA_L2]))
         out.append(fila([f"`{p}` invalidaciones"] +
                         [datos[c][p]["inv"] for c in CURVA_L2]))
 
@@ -406,7 +414,7 @@ def main(argv):
     except InformeInvalido as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    (raiz / "tablas.md").write_text(tablas(datos), encoding="utf-8")
+    (raiz / "tablas.md").write_text(tablas(datos), encoding="utf-8", newline="\n")
     hechos = graficos(datos, imgs)
     print(f"tablas:   {raiz / 'tablas.md'}")
     for h in hechos:
