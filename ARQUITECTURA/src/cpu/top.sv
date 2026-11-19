@@ -775,6 +775,22 @@ module top #(
   logic                     l2_ev_stall; // <--- NUEVO [L2-04]: Cable para llevar el evento al contador
   logic l2_ev_load_hit, l2_ev_load_miss, l2_ev_store_hit, l2_ev_store_miss; // <--- NUEVO [L2-05]
 
+  // La lectura de L1 que esta en curso se resuelve en memoria principal: la L2
+  // la fallo o, sin L2, toda lectura va a memoria. perf_counters la usa para
+  // repartir los ciclos de stall de ese fallo.
+  logic ev_lectura_a_mem;
+
+`ifndef CERBERO_SIN_L2
+  // El preprocesador no divide, asi que la coherencia de las tres constantes
+  // de la L2 se comprueba aqui, antes del primer ciclo.
+  initial begin
+    if (`L2_BYTES != `L2_SETS * `L2_WAYS * `LINE_BYTES)
+      $fatal(1, "L2_BYTES = %0d no coincide con L2_SETS x L2_WAYS x LINE_BYTES = %0d",
+             `L2_BYTES, `L2_SETS * `L2_WAYS * `LINE_BYTES);
+  end
+
+  assign ev_lectura_a_mem = l2_ev_load_miss;
+
   // 4. Instancia de la Caché L2
   l2_cache #(
       .WAYS(`L2_WAYS),
@@ -808,6 +824,44 @@ module top #(
       .ev_l2_store_hit  (l2_ev_store_hit),  // <--- NUEVO [L2-05]
       .ev_l2_store_miss (l2_ev_store_miss)  // <--- NUEVO [L2-05]
   );
+`else
+  // ---- Sin L2: el arbitro habla directo con la memoria principal ----------
+  // Es la linea base del analisis. El resto de la jerarquia no cambia: la L1,
+  // el write buffer, el arbitro y el subsistema de memoria son los mismos, asi
+  // que la diferencia medida es exactamente la que aporta la L2.
+  //
+  // Lectura: el pedido del arbitro pasa a mem_system. req baja en el ciclo de
+  // listo, que es el contrato de mem_controller.sv (ver mem_req en
+  // l2_cache.sv). Un RAW contra una linea que todavia esta en el eviction
+  // buffer lo resuelve el propio controlador, esperando el drenado.
+  //
+  // Escritura: el drenado del write buffer entra al eviction buffer con su
+  // mascara, en un ciclo, salvo que este lleno. Ese ciclo de espera es el
+  // equivalente del stall por eviction buffer lleno de la L2.
+  assign l2_mem_req    = l2_req_lectura && !mem_sys_listo;
+  assign l2_mem_linea  = l2_req_linea;
+  assign l2_rdata      = mem_sys_linea_datos;
+
+  assign l2_ev_push    = l2_req_escritura && !mem_ev_lleno;
+  assign l2_ev_linea   = l2_req_linea;
+  assign l2_ev_datos   = l2_req_wdata;
+  assign l2_ev_mascara = l2_req_wmask;
+
+  assign l2_listo      = (l2_req_lectura && mem_sys_listo) || l2_ev_push;
+
+  // Sin L2 no hay a quien invalidar ni que vaciar al terminar
+  assign l2_inv_req      = 1'b0;
+  assign l2_inv_linea    = '0;
+  assign l2_tiene_sucias = 1'b0;
+
+  assign l2_ev_stall      = l2_req_escritura && mem_ev_lleno;
+  assign l2_ev_load_hit   = 1'b0;
+  assign l2_ev_load_miss  = 1'b0;
+  assign l2_ev_store_hit  = 1'b0;
+  assign l2_ev_store_miss = 1'b0;
+
+  assign ev_lectura_a_mem = l2_req_lectura;
+`endif
 
   // ---- Memoria principal ------------------------------------------------------
 
@@ -1099,6 +1153,7 @@ module top #(
       .ev_mem_ocupado   (mem_sys_ocupado),
       // El fallo de L1 termina cuando el arbitro le entrega la linea
       .ev_relleno_fin   (l1_mem_listo),
+      .ev_lectura_a_mem (ev_lectura_a_mem),
       .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
       .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
       .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]

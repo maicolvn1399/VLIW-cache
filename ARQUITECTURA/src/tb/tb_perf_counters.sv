@@ -107,6 +107,7 @@ module tb_perf_counters;
       .ev_mem_acceso    (ev_mem_acceso),
       .ev_mem_ocupado   (ev_mem_ocupado),
       .ev_relleno_fin   (ev_relleno_fin),
+      .ev_lectura_a_mem (ev_l2_load_miss),   // como lo conecta top.sv con L2
 
       .ciclos         (ciclos),
       .bundles        (bundles),
@@ -176,6 +177,7 @@ module tb_perf_counters;
       .ev_mem_acceso    (ev_mem_acceso),
       .ev_mem_ocupado   (ev_mem_ocupado),
       .ev_relleno_fin   (ev_relleno_fin),
+      .ev_lectura_a_mem (ev_l2_load_miss),   // como lo conecta top.sv con L2
 
       .ciclos         (ciclos_chico),
       .bundles        (bundles_chico),

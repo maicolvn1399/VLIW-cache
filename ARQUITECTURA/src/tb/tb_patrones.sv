@@ -213,8 +213,18 @@ module tb_patrones;
     // 1024 x (1 - 1/e) = 647 distintas. Se comprueba contra esa prediccion con
     // holgura amplia, que es lo que confirma que el generador dispersa de
     // verdad y no se queda en un ciclo corto.
+`ifndef CERBERO_SIN_L2
     check1("toco cerca de 647 lineas distintas, como predice la teoria",
            (a_mem_acc > 550) && (a_mem_acc < 750));
+`else
+    // Sin L2 nada filtra las repeticiones: cada fallo de L1 es un viaje a
+    // memoria, asi que los accesos a memoria ya no cuentan lineas distintas
+    // sino fallos. La prediccion de arriba deja de aplicar; esta es exacta.
+    // Se suma el unico store del programa (guarda su resultado al final),
+    // que tambien baja a memoria cuando el write buffer lo drena.
+    check("sin L2, cada fallo de L1 y el store son un acceso a memoria",
+          a_mem_acc, a_ldm + a_sth + a_stm);
+`endif
 
     // Y toca menos lineas que el stride, que las visita todas
     check1("pero menos lineas que el stride, que las recorre todas",

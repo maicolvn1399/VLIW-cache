@@ -676,6 +676,7 @@ module tb_programa;
     integer accesos_l2, aciertos_l2;
     real tasa_fallos, penalidad_medida, amat;
     real m_l1_lect, m_l2_lect, t_l2, amat2_teorico, amat2_medido;
+    integer lect_a_mem;   // lecturas de L1 que se resolvieron en memoria
     integer total_stall;
     begin
       accesos  = hw_l1_ldh + hw_l1_ldm + hw_l1_sth + hw_l1_stm;
@@ -736,10 +737,17 @@ module tb_programa;
       aciertos_l2 = hw_l2_ldh + hw_l2_sth;
 
       $fdisplay(salida, "");
+`ifndef CERBERO_SIN_L2
       $fdisplay(salida, "  cache L2 unificada (%0d KB, %0d vias, %0d conjuntos, write-back,",
                 (`L2_SETS * `L2_WAYS * `LINE_BYTES) / 1024, `L2_WAYS, `L2_SETS);
       $fdisplay(salida, "                      write-allocate, LRU exacto, hit time %0d)",
                 `L2_HIT_CYCLES);
+`else
+      // Las lineas de abajo se imprimen igual, en cero, para que el informe
+      // tenga los mismos campos con y sin L2 y el barrido lo lea igual.
+      $fdisplay(salida, "  cache L2 unificada (sin L2: CERBERO_SIN_L2, los fallos de L1");
+      $fdisplay(salida, "                      van directo a memoria principal)");
+`endif
       $fdisplay(salida, "    accesos totales              %10d", accesos_l2);
       $fdisplay(salida, "      lecturas: aciertos         %10d", hw_l2_ldh);
       $fdisplay(salida, "      lecturas: fallos           %10d", hw_l2_ldm);
@@ -799,8 +807,17 @@ module tb_programa;
                   (1.0 * hw_l2_ldm) / (hw_l2_ldh + hw_l2_ldm);
       t_l2      = 1.0 * `L2_HIT_CYCLES;
 
+`ifndef CERBERO_SIN_L2
+      lect_a_mem    = hw_l2_ldm;
       amat2_teorico = `L1_HIT_CYCLES +
                       m_l1_lect * (t_l2 + m_l2_lect * (`T_MEM + `L2_MISS_EXTRA));
+`else
+      // Sin L2 la formula es la de un solo nivel: todo fallo de L1 va a
+      // memoria, y paga T_mem mas el control del camino directo
+      // (MEM_DIRECTO_EXTRA, cerbero_defs.svh).
+      lect_a_mem    = hw_l1_ldm;
+      amat2_teorico = `L1_HIT_CYCLES + m_l1_lect * (`T_MEM + `MEM_DIRECTO_EXTRA);
+`endif
       amat2_medido  = ((hw_l1_ldh + hw_l1_ldm) == 0) ? 1.0 * `L1_HIT_CYCLES :
                       `L1_HIT_CYCLES + (1.0 * hw_st_miss) / (hw_l1_ldh + hw_l1_ldm);
 
@@ -808,15 +825,26 @@ module tb_programa;
       $fdisplay(salida, "  AMAT de lectura con dos niveles");
       $fdisplay(salida, "    m_L1 (lecturas)              %9.2f%%", 100.0 * m_l1_lect);
       $fdisplay(salida, "    m_L2 local (lecturas)        %9.2f%%", 100.0 * m_l2_lect);
+`ifndef CERBERO_SIN_L2
       $fdisplay(salida, "    teorico                      %10.2f ciclos  (T_L1=%0d, T_L2=%0d, T_mem=%0d+%0d)",
                 amat2_teorico, `L1_HIT_CYCLES, `L2_HIT_CYCLES, `T_MEM, `L2_MISS_EXTRA);
+`else
+      $fdisplay(salida, "    teorico                      %10.2f ciclos  (T_L1=%0d, sin L2, T_mem=%0d+%0d)",
+                amat2_teorico, `L1_HIT_CYCLES, `T_MEM, `MEM_DIRECTO_EXTRA);
+`endif
       $fdisplay(salida, "    medido                       %10.2f ciclos", amat2_medido);
       $fdisplay(salida, "    penalidad medida, acierto L2 %10.1f ciclos  (minimo %0d)",
                 (hw_l2_ldh == 0) ? 0.0 : (1.0 * hw_st_l2h) / hw_l2_ldh,
                 `L2_HIT_CYCLES);
+`ifndef CERBERO_SIN_L2
       $fdisplay(salida, "    penalidad medida, fallo L2   %10.1f ciclos  (minimo %0d)",
-                (hw_l2_ldm == 0) ? 0.0 : (1.0 * hw_st_l2m) / hw_l2_ldm,
+                (lect_a_mem == 0) ? 0.0 : (1.0 * hw_st_l2m) / lect_a_mem,
                 `L2_HIT_CYCLES + `T_MEM + `L2_MISS_EXTRA);
+`else
+      $fdisplay(salida, "    penalidad medida, fallo L2   %10.1f ciclos  (minimo %0d, va directo a memoria)",
+                (lect_a_mem == 0) ? 0.0 : (1.0 * hw_st_l2m) / lect_a_mem,
+                `T_MEM + `MEM_DIRECTO_EXTRA);
+`endif
 
 
       // El desglose tiene que sumar el contador global de stalls. Si no suma,

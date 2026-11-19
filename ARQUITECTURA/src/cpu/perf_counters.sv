@@ -131,6 +131,11 @@ module perf_counters #(
     //      pulso marca el ciclo en que la linea pedida llega a la L1, que es
     //      cuando el fallo termina y sus ciclos de stall ya se pueden repartir.
     input  logic ev_relleno_fin,
+    // La lectura de L1 en curso se resuelve en memoria principal: la L2 la
+    // fallo o, con CERBERO_SIN_L2, no hay L2. Es una entrada aparte de
+    // ev_l2_load_miss para que la linea base sin L2 reparta igual sus ciclos
+    // sin inventar fallos de una L2 que no existe.
+    input  logic ev_lectura_a_mem,
 
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
@@ -298,9 +303,10 @@ module perf_counters #(
   // pueden asignar al vuelo: se acumulan mientras el fallo esta en curso y se
   // descargan de una vez en uno de los dos contadores cuando llega la linea.
   //
-  // Solo ev_l2_load_miss marca el fallo. La L2 tambien atiende al write
-  // buffer, pero sus escrituras salen como ev_l2_store_*; una lectura de L2
-  // solo la origina un fallo de lectura de L1 (l2_arbiter.sv, SIRVIENDO_L1).
+  // Solo ev_lectura_a_mem marca el fallo (top.sv la conecta al fallo de
+  // lectura de la L2). La L2 tambien atiende al write buffer, pero sus
+  // escrituras salen como ev_l2_store_*; una lectura de L2 solo la origina un
+  // fallo de lectura de L1 (l2_arbiter.sv, SIRVIENDO_L1).
   // El arbitro atiende una lectura a la vez, asi que hay a lo sumo un fallo
   // en vuelo y alcanza con un acumulador.
   //
@@ -319,7 +325,7 @@ module perf_counters #(
   // usa la linea en ese mismo ciclo), pero sumarlo aqui mantiene la igualdad
   // con stall_por_miss sin depender de ese detalle.
   assign stall_fallo_total = stall_en_curso + {{(CNT_W-1){1'b0}}, ev_stall_miss};
-  assign fallo_fue_l2      = fallo_l2 || ev_l2_load_miss;
+  assign fallo_fue_l2      = fallo_l2 || ev_lectura_a_mem;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -330,7 +336,7 @@ module perf_counters #(
       fallo_l2       <= 1'b0;
     end else begin
       stall_en_curso <= stall_fallo_total;
-      if (ev_l2_load_miss) fallo_l2 <= 1'b1;
+      if (ev_lectura_a_mem) fallo_l2 <= 1'b1;
     end
   end
 
