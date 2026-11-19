@@ -578,6 +578,21 @@ metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp
 	done
 	@python3 $(TOOLS)/tabla_metricas.py metricas_*.txt
 
+# ---- Analisis de rendimiento de la Iteracion 5 ------------------------------
+# Corre el barrido de la jerarquia (base, sin L2, capacidad de L1 y de L2) y
+# regenera barrido/jerarquia/tablas.md y los graficos docs/imgs/it5_*.png.
+# Tarda unos minutos: once configuraciones por catorce programas.
+#
+#   make analisis          barrido completo y tablas
+#   make tablas-analisis   solo las tablas, sobre el barrido que ya existe
+.PHONY: analisis tablas-analisis
+analisis:
+	bash $(TOOLS)/barrido_jerarquia.sh
+	python3 $(TOOLS)/tabla_analisis.py
+
+tablas-analisis:
+	python3 $(TOOLS)/tabla_analisis.py
+
 # La comparacion de la demostracion VLIW, fuera del testbench, para enseñarla
 # con los dos programas a la vista
 vliw-comparar: $(PROGS)/suma_simple_emp.hex $(PROGS)/suma_vliw_emp.hex
