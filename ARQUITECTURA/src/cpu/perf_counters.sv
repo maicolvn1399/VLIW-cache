@@ -127,6 +127,15 @@ module perf_counters #(
     //      la utilizacion del ancho de banda en el informe.
     input  logic ev_mem_acceso,
     input  logic ev_mem_ocupado,
+    // 5.1: la penalidad de un fallo de L1 depende de si la L2 acierta. Este
+    //      pulso marca el ciclo en que la linea pedida llega a la L1, que es
+    //      cuando el fallo termina y sus ciclos de stall ya se pueden repartir.
+    input  logic ev_relleno_fin,
+    // La lectura de L1 en curso se resuelve en memoria principal: la L2 la
+    // fallo o, con CERBERO_SIN_L2, no hay L2. Es una entrada aparte de
+    // ev_l2_load_miss para que la linea base sin L2 reparta igual sus ciclos
+    // sin inventar fallos de una L2 que no existe.
+    input  logic ev_lectura_a_mem,
 
     // ---- Las cuentas ---------------------------------------------------------
     output logic [CNT_W-1:0] ciclos,          // ciclos de ejecucion
@@ -154,6 +163,10 @@ module perf_counters #(
     output logic [CNT_W-1:0] stall_por_wb,
     output logic [CNT_W-1:0] stall_por_raw,
     output logic [CNT_W-1:0] stall_por_evict, // <--- NUEVO [L2-04]
+    // stall_por_miss repartido segun lo que hizo la L2 con esa lectura. Suman
+    // exactamente stall_por_miss una vez que no queda ningun fallo en vuelo.
+    output logic [CNT_W-1:0] stall_l2_hit,
+    output logic [CNT_W-1:0] stall_l2_miss,
     output logic [CNT_W-1:0] l2_load_hit,     // <--- NUEVO [L2-05]
     output logic [CNT_W-1:0] l2_load_miss,    // <--- NUEVO [L2-05]
     output logic [CNT_W-1:0] l2_store_hit,    // <--- NUEVO [L2-05]
@@ -247,7 +260,8 @@ module perf_counters #(
   // veces iguales. Las salidas con nombre se asignan al final.
   // ===========================================================================
 
-  localparam int NCONT = 29; // Iteracion 5: +3 (invalidaciones y memoria)
+  localparam int NCONT = 31; // Iteracion 5: +5 (invalidaciones, memoria y
+                             // stall por tipo de fallo de L2)
 
   localparam int C_CICLOS   = 0;
   localparam int C_BUNDLES  = 1;
@@ -274,18 +288,67 @@ module perf_counters #(
   localparam int C_INV      = 26; // Iteracion 5, seccion 5.2
   localparam int C_MEM_ACC  = 27; // Iteracion 5, seccion 5.3
   localparam int C_MEM_CIC  = 28; // Iteracion 5, seccion 5.3
+  localparam int C_SM_L2H   = 29; // Iteracion 5, seccion 5.1
+  localparam int C_SM_L2M   = 30; // Iteracion 5, seccion 5.1
 
   localparam logic [CNT_W-1:0] TOPE = {CNT_W{1'b1}};
 
   logic [NCONT-1:0][CNT_W-1:0] cont;
 
-  // Cuanto suma cada contador en este ciclo. Solo el de instrucciones puede
-  // sumar mas de uno: hasta cinco, una por ranura ocupada.
-  logic [NCONT-1:0][2:0] inc;
+  // ===========================================================================
+  // Stall por fallo de L1, segun acierte o falle la L2
+  //
+  // El tipo de fallo recien se sabe cuando la L2 evalua la lectura, y para
+  // entonces ya pasaron ciclos de stall que pertenecen a ese fallo. No se
+  // pueden asignar al vuelo: se acumulan mientras el fallo esta en curso y se
+  // descargan de una vez en uno de los dos contadores cuando llega la linea.
+  //
+  // Solo ev_lectura_a_mem marca el fallo (top.sv la conecta al fallo de
+  // lectura de la L2). La L2 tambien atiende al write buffer, pero sus
+  // escrituras salen como ev_l2_store_*; una lectura de L2 solo la origina un
+  // fallo de lectura de L1 (l2_arbiter.sv, SIRVIENDO_L1).
+  // El arbitro atiende una lectura a la vez, asi que hay a lo sumo un fallo
+  // en vuelo y alcanza con un acumulador.
+  //
+  // El acumulador no satura: un solo fallo dura a lo sumo unas decenas de
+  // ciclos (8 de L2, 53 de memoria, mas lo que espere el arbitro), muy lejos
+  // del tope incluso con la instancia angosta del testbench.
+  // ===========================================================================
+
+  logic [CNT_W-1:0] stall_en_curso;  // ciclos del fallo que todavia no termina
+  logic             fallo_l2;        // la L2 fallo esta lectura
+
+  logic [CNT_W-1:0] stall_fallo_total;
+  logic             fallo_fue_l2;
+
+  // El ciclo de llegada tambien cuenta si fuera de stall; hoy no lo es (la L1
+  // usa la linea en ese mismo ciclo), pero sumarlo aqui mantiene la igualdad
+  // con stall_por_miss sin depender de ese detalle.
+  assign stall_fallo_total = stall_en_curso + {{(CNT_W-1){1'b0}}, ev_stall_miss};
+  assign fallo_fue_l2      = fallo_l2 || ev_lectura_a_mem;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      stall_en_curso <= '0;
+      fallo_l2       <= 1'b0;
+    end else if (ev_relleno_fin) begin
+      stall_en_curso <= '0;
+      fallo_l2       <= 1'b0;
+    end else begin
+      stall_en_curso <= stall_fallo_total;
+      if (ev_lectura_a_mem) fallo_l2 <= 1'b1;
+    end
+  end
+
+  // Cuanto suma cada contador en este ciclo. Casi todos suman 0 o 1; el de
+  // instrucciones suma hasta cinco, y los dos de stall por tipo de fallo
+  // descargan un fallo completo de una vez. Por eso inc mide lo mismo que un
+  // contador.
+  logic [NCONT-1:0][CNT_W-1:0] inc;
 
   always_comb begin
     integer k;
-    for (k = 0; k < NCONT; k = k + 1) inc[k] = 3'd0;
+    for (k = 0; k < NCONT; k = k + 1) inc[k] = '0;
 
     if (corre) begin
       inc[C_CICLOS] = 3'd1;
@@ -327,6 +390,11 @@ module perf_counters #(
       if (ev_inv_ejecutada) inc[C_INV]     = 3'd1;
       if (ev_mem_acceso)    inc[C_MEM_ACC] = 3'd1;
       if (ev_mem_ocupado)   inc[C_MEM_CIC] = 3'd1;
+
+      if (ev_relleno_fin) begin
+        if (fallo_fue_l2) inc[C_SM_L2M] = stall_fallo_total;
+        else              inc[C_SM_L2H] = stall_fallo_total;
+      end
     end
 
     if (avanza) begin
@@ -356,12 +424,12 @@ module perf_counters #(
       desbordado <= 1'b0;
     end else begin
       for (k = 0; k < NCONT; k = k + 1) begin
-        if (inc[k] != 3'd0) begin
-          if (cont[k] > TOPE - {{(CNT_W-3){1'b0}}, inc[k]}) begin
+        if (inc[k] != '0) begin
+          if (cont[k] > TOPE - inc[k]) begin
             cont[k]    <= TOPE;
             desbordado <= 1'b1;
           end else begin
-            cont[k] <= cont[k] + {{(CNT_W-3){1'b0}}, inc[k]};
+            cont[k] <= cont[k] + inc[k];
           end
         end
       end
@@ -397,6 +465,8 @@ module perf_counters #(
   assign inv_ejecutadas  = cont[C_INV];
   assign mem_accesos     = cont[C_MEM_ACC];
   assign mem_ciclos      = cont[C_MEM_CIC];
+  assign stall_l2_hit    = cont[C_SM_L2H];
+  assign stall_l2_miss   = cont[C_SM_L2M];
 
   genvar g;
   generate

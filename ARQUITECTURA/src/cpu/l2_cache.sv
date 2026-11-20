@@ -87,6 +87,19 @@ module l2_cache #(
   localparam int TAG_W = `MEM_LIDX_W - SET_W;
   localparam int WAY_W = $clog2(WAYS);
 
+  // La indexacion corta bits de la direccion de linea y el LRU por edades
+  // necesita al menos un bit de edad: con vias o conjuntos que no sean
+  // potencia de dos, o con una sola via, la cache se elabora igual pero
+  // indexa mal y en silencio. Un barrido con constantes mal escritas tiene
+  // que fallar aqui, no dar numeros.
+  initial begin
+    if (WAYS < 2 || (WAYS & (WAYS - 1)) != 0)
+      $fatal(1, "l2_cache: WAYS = %0d, tiene que ser potencia de dos y >= 2", WAYS);
+    if (SETS < 1 || (SETS & (SETS - 1)) != 0 || SET_W >= `MEM_LIDX_W)
+      $fatal(1, "l2_cache: SETS = %0d, tiene que ser potencia de dos y menor que %0d",
+             SETS, 1 << `MEM_LIDX_W);
+  end
+
   // Arreglos de memoria estática
   logic [TAG_W-1:0] etiqueta [0:WAYS-1][0:SETS-1];
   logic             valido   [0:WAYS-1][0:SETS-1];

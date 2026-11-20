@@ -119,12 +119,13 @@ DEPS_credencial   := $(wildcard $(CPU)/*.sv) \
 # compara lo que dejan contra los valores de sus cabeceras. El quinto,
 # recorrido_cache, es el unico cuyo oraculo incluye los CONTADORES de la cache
 # y no solo los datos: su numero de aciertos y fallos sale de aritmetica.
-# tb_patrones monta los tres procesadores de la Iteracion 5, uno por patron de
-# acceso, y comprueba sus CONTADORES contra lo que la teoria predice.
+# tb_patrones monta los cuatro procesadores de la Iteracion 5, uno por patron
+# de acceso, y comprueba sus CONTADORES contra lo que la teoria predice.
 DEPS_patrones     := $(wildcard $(CPU)/*.sv) \
                      $(PROGS)/patron_secuencial.hex \
                      $(PROGS)/patron_aleatorio.hex \
-                     $(PROGS)/patron_stride.hex
+                     $(PROGS)/patron_stride.hex \
+                     $(PROGS)/patron_reuso.hex
 
 DEPS_ejemplos     := $(wildcard $(CPU)/*.sv) \
                      $(PROGS)/fibonacci.hex \
@@ -239,6 +240,7 @@ PALABRAS_recorrido_cache := 16384
 PALABRAS_patron_aleatorio := 16384
 PALABRAS_patron_stride := 16384
 PALABRAS_patron_secuencial := 16384
+PALABRAS_patron_reuso := 16384
 # tb_sum instancia memorias chicas: 64 bundles y 16 palabras
 BUNDLES_suma_10_15  := 64
 PALABRAS_suma_10_15 := 16
@@ -564,7 +566,7 @@ empacar:
 PROGS_METRICAS := fibonacci estadisticas contar_hasta_n div32_prueba feistel \
                   lazo_estres sesion_sin_logout suma_10_15 \
                   suma_simple_emp suma_vliw_emp recorrido_cache \
-                  patron_secuencial patron_stride patron_aleatorio
+                  patron_secuencial patron_stride patron_aleatorio patron_reuso
 
 .PHONY: metricas
 metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp
@@ -575,6 +577,21 @@ metricas: $(PROGS)/suma_simple_emp.s $(PROGS)/suma_vliw_emp.s tb_programa.vvp
 	            ESCRITURAS= > /dev/null || exit 1; \
 	done
 	@python3 $(TOOLS)/tabla_metricas.py metricas_*.txt
+
+# ---- Analisis de rendimiento de la Iteracion 5 ------------------------------
+# Corre el barrido de la jerarquia (base, sin L2, capacidad de L1 y de L2) y
+# regenera barrido/jerarquia/tablas.md y los graficos docs/imgs/it5_*.png.
+# Tarda unos minutos: once configuraciones por catorce programas.
+#
+#   make analisis          barrido completo y tablas
+#   make tablas-analisis   solo las tablas, sobre el barrido que ya existe
+.PHONY: analisis tablas-analisis
+analisis:
+	bash $(TOOLS)/barrido_jerarquia.sh
+	python3 $(TOOLS)/tabla_analisis.py
+
+tablas-analisis:
+	python3 $(TOOLS)/tabla_analisis.py
 
 # La comparacion de la demostracion VLIW, fuera del testbench, para enseñarla
 # con los dos programas a la vista

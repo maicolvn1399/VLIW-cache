@@ -186,6 +186,11 @@ module mem_controller (
   // ese ciclo el estado todavia dice LIBRE mientras la entrada ya esta
   // condenada. Una fusion ahi modifica la entrada despues de que la copia se
   // llevo el valor viejo, y esos bytes no llegan nunca a memoria.
+  //
+  // puede_leer y puede_drenar se calculan mas abajo, donde se decide que
+  // transaccion empieza, pero se declaran aqui porque drenando ya las lee.
+  logic puede_leer, puede_drenar;
+
   assign drenando = ((estado == LIBRE) && puede_drenar) ||
                     (estado == WR_LAT) || (estado == WR_BURST);
 
@@ -196,7 +201,6 @@ module mem_controller (
   // quede repartida entre ramas del case.
   // ---------------------------------------------------------------------------
 
-  logic puede_leer, puede_drenar;
 
   // Una lectura puede empezar si hay pedido y la linea NO esta esperando en el
   // buffer. Con conflicto, la lectura cede el bus: ver la nota de arriba.

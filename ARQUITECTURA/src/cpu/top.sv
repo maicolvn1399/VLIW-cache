@@ -155,6 +155,8 @@ module top #(
     output logic [31:0]                   perf_stall_wb,
     output logic [31:0]                   perf_stall_raw,
     output logic [31:0]                   perf_stall_evict, // <--- NUEVO [L2-04]
+    output logic [31:0]                   perf_stall_l2_hit,   // Iteracion 5, 5.1
+    output logic [31:0]                   perf_stall_l2_miss,  // Iteracion 5, 5.1
     output logic [31:0]                   perf_inv_ejecutadas, // Iteracion 5, 5.2
     output logic [31:0]                   perf_mem_accesos,    // Iteracion 5, 5.3
     output logic [31:0]                   perf_mem_ciclos,     // Iteracion 5, 5.3
@@ -762,11 +764,32 @@ module top #(
   // tiempo.
   logic l2_vaciar, l2_tiene_sucias;
 
+  // mem_valid es de la frontera EX/MEM, mas abajo, pero se lee aqui: el
+  // estandar exige declarar una senal antes de su primer uso, e Icarus 13 lo
+  // hace cumplir.
+  logic             mem_valid;
+
   assign l2_vaciar = halted && !id_valid && !ex_valid && !mem_valid
                   && !cache_stall && wb_vacio;
 
   logic                     l2_ev_stall; // <--- NUEVO [L2-04]: Cable para llevar el evento al contador
   logic l2_ev_load_hit, l2_ev_load_miss, l2_ev_store_hit, l2_ev_store_miss; // <--- NUEVO [L2-05]
+
+  // La lectura de L1 que esta en curso se resuelve en memoria principal: la L2
+  // la fallo o, sin L2, toda lectura va a memoria. perf_counters la usa para
+  // repartir los ciclos de stall de ese fallo.
+  logic ev_lectura_a_mem;
+
+`ifndef CERBERO_SIN_L2
+  // El preprocesador no divide, asi que la coherencia de las tres constantes
+  // de la L2 se comprueba aqui, antes del primer ciclo.
+  initial begin
+    if (`L2_BYTES != `L2_SETS * `L2_WAYS * `LINE_BYTES)
+      $fatal(1, "L2_BYTES = %0d no coincide con L2_SETS x L2_WAYS x LINE_BYTES = %0d",
+             `L2_BYTES, `L2_SETS * `L2_WAYS * `LINE_BYTES);
+  end
+
+  assign ev_lectura_a_mem = l2_ev_load_miss;
 
   // 4. Instancia de la Caché L2
   l2_cache #(
@@ -801,6 +824,44 @@ module top #(
       .ev_l2_store_hit  (l2_ev_store_hit),  // <--- NUEVO [L2-05]
       .ev_l2_store_miss (l2_ev_store_miss)  // <--- NUEVO [L2-05]
   );
+`else
+  // ---- Sin L2: el arbitro habla directo con la memoria principal ----------
+  // Es la linea base del analisis. El resto de la jerarquia no cambia: la L1,
+  // el write buffer, el arbitro y el subsistema de memoria son los mismos, asi
+  // que la diferencia medida es exactamente la que aporta la L2.
+  //
+  // Lectura: el pedido del arbitro pasa a mem_system. req baja en el ciclo de
+  // listo, que es el contrato de mem_controller.sv (ver mem_req en
+  // l2_cache.sv). Un RAW contra una linea que todavia esta en el eviction
+  // buffer lo resuelve el propio controlador, esperando el drenado.
+  //
+  // Escritura: el drenado del write buffer entra al eviction buffer con su
+  // mascara, en un ciclo, salvo que este lleno. Ese ciclo de espera es el
+  // equivalente del stall por eviction buffer lleno de la L2.
+  assign l2_mem_req    = l2_req_lectura && !mem_sys_listo;
+  assign l2_mem_linea  = l2_req_linea;
+  assign l2_rdata      = mem_sys_linea_datos;
+
+  assign l2_ev_push    = l2_req_escritura && !mem_ev_lleno;
+  assign l2_ev_linea   = l2_req_linea;
+  assign l2_ev_datos   = l2_req_wdata;
+  assign l2_ev_mascara = l2_req_wmask;
+
+  assign l2_listo      = (l2_req_lectura && mem_sys_listo) || l2_ev_push;
+
+  // Sin L2 no hay a quien invalidar ni que vaciar al terminar
+  assign l2_inv_req      = 1'b0;
+  assign l2_inv_linea    = '0;
+  assign l2_tiene_sucias = 1'b0;
+
+  assign l2_ev_stall      = l2_req_escritura && mem_ev_lleno;
+  assign l2_ev_load_hit   = 1'b0;
+  assign l2_ev_load_miss  = 1'b0;
+  assign l2_ev_store_hit  = 1'b0;
+  assign l2_ev_store_miss = 1'b0;
+
+  assign ev_lectura_a_mem = l2_req_lectura;
+`endif
 
   // ---- Memoria principal ------------------------------------------------------
 
@@ -959,8 +1020,7 @@ module top #(
   logic [1:0] ex_addr_lo;
   assign ex_addr_lo = lsu_eff_addr[1:0];
 
-  // Frontera EX/MEM
-  logic             mem_valid;
+  // Frontera EX/MEM (mem_valid se declara arriba, junto al vaciado de la L2)
   logic [31:0]      mem_s2;
   logic [1:0]       mem_addr_lo;
   logic [`NWRITE_PORTS-1:0]                mem_wen;
@@ -1091,6 +1151,9 @@ module top #(
       .ev_inv_ejecutada (ev_inv_ejecutada),
       .ev_mem_acceso    (mem_sys_inicia_rd || mem_sys_inicia_wr),
       .ev_mem_ocupado   (mem_sys_ocupado),
+      // El fallo de L1 termina cuando el arbitro le entrega la linea
+      .ev_relleno_fin   (l1_mem_listo),
+      .ev_lectura_a_mem (ev_lectura_a_mem),
       .ev_stall_evict (l2_ev_stall),      // <--- NUEVO [L2-04]: Entrada del evento
       .ev_l2_load_hit   (l2_ev_load_hit),   // <--- NUEVO [L2-05]
       .ev_l2_load_miss  (l2_ev_load_miss),  // <--- NUEVO [L2-05]
@@ -1114,9 +1177,11 @@ module top #(
       .stall_por_wb   (perf_stall_wb),
       .stall_por_raw  (perf_stall_raw),
       .stall_por_evict(perf_stall_evict),
+      .stall_l2_hit   (perf_stall_l2_hit),
+      .stall_l2_miss  (perf_stall_l2_miss),
       .inv_ejecutadas (perf_inv_ejecutadas),
       .mem_accesos    (perf_mem_accesos),
-      .mem_ciclos     (perf_mem_ciclos), // <--- NUEVO [L2-04]: Salida hacia el testbench
+      .mem_ciclos     (perf_mem_ciclos),
       .l2_load_hit    (perf_l2_load_hit),   // <--- NUEVO [L2-05]
       .l2_load_miss   (perf_l2_load_miss),  // <--- NUEVO [L2-05]
       .l2_store_hit   (perf_l2_store_hit),  // <--- NUEVO [L2-05]

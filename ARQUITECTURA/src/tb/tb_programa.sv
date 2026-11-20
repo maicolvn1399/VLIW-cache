@@ -109,6 +109,7 @@ module tb_programa;
   // Iteracion 5, secciones 5.2 y 5.3 del enunciado
   logic [31:0]              hw_inv, hw_mem_acc, hw_mem_cic;
   logic [31:0]              hw_st_miss, hw_st_wb, hw_st_raw;
+  logic [31:0]              hw_st_l2h, hw_st_l2m;   // seccion 5.1
   logic                     hw_drenada;
   logic                     hw_desbordado;
 
@@ -140,6 +141,8 @@ module tb_programa;
       .perf_stall_miss     (hw_st_miss),
       .perf_stall_wb       (hw_st_wb),
       .perf_stall_raw      (hw_st_raw),
+      .perf_stall_l2_hit   (hw_st_l2h),
+      .perf_stall_l2_miss  (hw_st_l2m),
       .perf_l2_load_hit    (hw_l2_ldh),
       .perf_l2_load_miss   (hw_l2_ldm),
       .perf_l2_store_hit   (hw_l2_sth),
@@ -672,6 +675,8 @@ module tb_programa;
     integer accesos, fallos, aciertos;
     integer accesos_l2, aciertos_l2;
     real tasa_fallos, penalidad_medida, amat;
+    real m_l1_lect, m_l2_lect, t_l2, amat2_teorico, amat2_medido;
+    integer lect_a_mem;   // lecturas de L1 que se resolvieron en memoria
     integer total_stall;
     begin
       accesos  = hw_l1_ldh + hw_l1_ldm + hw_l1_sth + hw_l1_stm;
@@ -714,6 +719,10 @@ module tb_programa;
       $fdisplay(salida, "");
       $fdisplay(salida, "    ciclos perdidos, por causa");
       $fdisplay(salida, "      fallo de lectura           %10d", hw_st_miss);
+      // Un fallo de L1 cuesta muy distinto segun lo resuelva la L2 o la
+      // memoria principal; el promedio de arriba mezcla los dos casos.
+      $fdisplay(salida, "        que acerto en L2         %10d", hw_st_l2h);
+      $fdisplay(salida, "        que fallo en L2          %10d", hw_st_l2m);
       $fdisplay(salida, "      write buffer lleno         %10d", hw_st_wb);
       $fdisplay(salida, "      conflicto RAW              %10d", hw_st_raw);
       $fdisplay(salida, "      eviction buffer lleno      %10d", hw_st_evict);
@@ -728,10 +737,17 @@ module tb_programa;
       aciertos_l2 = hw_l2_ldh + hw_l2_sth;
 
       $fdisplay(salida, "");
+`ifndef CERBERO_SIN_L2
       $fdisplay(salida, "  cache L2 unificada (%0d KB, %0d vias, %0d conjuntos, write-back,",
                 (`L2_SETS * `L2_WAYS * `LINE_BYTES) / 1024, `L2_WAYS, `L2_SETS);
       $fdisplay(salida, "                      write-allocate, LRU exacto, hit time %0d)",
                 `L2_HIT_CYCLES);
+`else
+      // Las lineas de abajo se imprimen igual, en cero, para que el informe
+      // tenga los mismos campos con y sin L2 y el barrido lo lea igual.
+      $fdisplay(salida, "  cache L2 unificada (sin L2: CERBERO_SIN_L2, los fallos de L1");
+      $fdisplay(salida, "                      van directo a memoria principal)");
+`endif
       $fdisplay(salida, "    accesos totales              %10d", accesos_l2);
       $fdisplay(salida, "      lecturas: aciertos         %10d", hw_l2_ldh);
       $fdisplay(salida, "      lecturas: fallos           %10d", hw_l2_ldm);
@@ -739,6 +755,11 @@ module tb_programa;
       $fdisplay(salida, "      escrituras: fallos         %10d", hw_l2_stm);
       $fdisplay(salida, "    tasa de aciertos             %9.2f%%",
                 (accesos_l2 == 0) ? 0.0 : 100.0 * aciertos_l2 / accesos_l2);
+      // Tasa LOCAL: fallos de L2 sobre los accesos que le llegaron a la L2,
+      // no sobre los accesos del programa. Es la que entra en el AMAT.
+      $fdisplay(salida, "    tasa de fallos local         %9.2f%%",
+                (accesos_l2 == 0) ? 0.0 :
+                100.0 * (hw_l2_ldm + hw_l2_stm) / accesos_l2);
 
       // ---- Invalidaciones hacia atras (seccion 5.2) ------------------------
       // El enunciado las exige por haber elegido politica inclusiva: sirven
@@ -767,9 +788,70 @@ module tb_programa;
       $fdisplay(salida, "      ventana medida             %10d ciclos  (%0d del programa + %0d de drenado)",
                 hw_ciclos + guarda_drenado, hw_ciclos, guarda_drenado);
 
+      // ---- AMAT de dos niveles (seccion 5.1) --------------------------------
+      // Solo las lecturas detienen el pipeline (no-write-allocate en L1 y
+      // write buffer), asi que las dos tasas son de lecturas:
+      //   m_L1 = fallos de lectura de L1 / lecturas de L1
+      //   m_L2 = fallos de lectura de L2 / lecturas de L2   (tasa local)
+      //
+      //   AMAT teorico = T_L1 + m_L1 x (T_L2 + m_L2 x T_mem)
+      //
+      // T_L2 es L2_HIT_CYCLES y la penalidad de L2 es T_mem mas los dos ciclos
+      // de control de un fallo (L2_MISS_EXTRA, cerbero_defs.svh). El AMAT
+      // medido sale de los ciclos de stall reales; la diferencia con el
+      // teorico es lo que los fallos pagaron de mas esperando a que el arbitro
+      // terminara de drenar el write buffer.
+      m_l1_lect = ((hw_l1_ldh + hw_l1_ldm) == 0) ? 0.0 :
+                  (1.0 * hw_l1_ldm) / (hw_l1_ldh + hw_l1_ldm);
+      m_l2_lect = ((hw_l2_ldh + hw_l2_ldm) == 0) ? 0.0 :
+                  (1.0 * hw_l2_ldm) / (hw_l2_ldh + hw_l2_ldm);
+      t_l2      = 1.0 * `L2_HIT_CYCLES;
+
+`ifndef CERBERO_SIN_L2
+      lect_a_mem    = hw_l2_ldm;
+      amat2_teorico = `L1_HIT_CYCLES +
+                      m_l1_lect * (t_l2 + m_l2_lect * (`T_MEM + `L2_MISS_EXTRA));
+`else
+      // Sin L2 la formula es la de un solo nivel: todo fallo de L1 va a
+      // memoria, y paga T_mem mas el control del camino directo
+      // (MEM_DIRECTO_EXTRA, cerbero_defs.svh).
+      lect_a_mem    = hw_l1_ldm;
+      amat2_teorico = `L1_HIT_CYCLES + m_l1_lect * (`T_MEM + `MEM_DIRECTO_EXTRA);
+`endif
+      amat2_medido  = ((hw_l1_ldh + hw_l1_ldm) == 0) ? 1.0 * `L1_HIT_CYCLES :
+                      `L1_HIT_CYCLES + (1.0 * hw_st_miss) / (hw_l1_ldh + hw_l1_ldm);
+
+      $fdisplay(salida, "");
+      $fdisplay(salida, "  AMAT de lectura con dos niveles");
+      $fdisplay(salida, "    m_L1 (lecturas)              %9.2f%%", 100.0 * m_l1_lect);
+      $fdisplay(salida, "    m_L2 local (lecturas)        %9.2f%%", 100.0 * m_l2_lect);
+`ifndef CERBERO_SIN_L2
+      $fdisplay(salida, "    teorico                      %10.2f ciclos  (T_L1=%0d, T_L2=%0d, T_mem=%0d+%0d)",
+                amat2_teorico, `L1_HIT_CYCLES, `L2_HIT_CYCLES, `T_MEM, `L2_MISS_EXTRA);
+`else
+      $fdisplay(salida, "    teorico                      %10.2f ciclos  (T_L1=%0d, sin L2, T_mem=%0d+%0d)",
+                amat2_teorico, `L1_HIT_CYCLES, `T_MEM, `MEM_DIRECTO_EXTRA);
+`endif
+      $fdisplay(salida, "    medido                       %10.2f ciclos", amat2_medido);
+      $fdisplay(salida, "    penalidad medida, acierto L2 %10.1f ciclos  (minimo %0d)",
+                (hw_l2_ldh == 0) ? 0.0 : (1.0 * hw_st_l2h) / hw_l2_ldh,
+                `L2_HIT_CYCLES);
+`ifndef CERBERO_SIN_L2
+      $fdisplay(salida, "    penalidad medida, fallo L2   %10.1f ciclos  (minimo %0d)",
+                (lect_a_mem == 0) ? 0.0 : (1.0 * hw_st_l2m) / lect_a_mem,
+                `L2_HIT_CYCLES + `T_MEM + `L2_MISS_EXTRA);
+`else
+      $fdisplay(salida, "    penalidad medida, fallo L2   %10.1f ciclos  (minimo %0d, va directo a memoria)",
+                (lect_a_mem == 0) ? 0.0 : (1.0 * hw_st_l2m) / lect_a_mem,
+                `T_MEM + `MEM_DIRECTO_EXTRA);
+`endif
+
+
       // El desglose tiene que sumar el contador global de stalls. Si no suma,
       // alguna causa se esta contando dos veces o falta una.
       comparar(salida, "suma de causas = stalls", total_stall, hw_stall);
+      comparar(salida, "stall_l2_hit + stall_l2_miss = stall_por_miss",
+               hw_st_l2h + hw_st_l2m, hw_st_miss);
 
       // Y todo acceso a la cache fue un load o un store del programa.
       comparar(salida, "accesos L1 = loads + stores", accesos,

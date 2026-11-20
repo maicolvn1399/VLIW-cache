@@ -33,8 +33,17 @@
 
 module tb_l2_cache();
 
-  localparam int WAYS = 4;
-  localparam int SETS = 128;
+  // La geometria es la de cerbero_defs.svh, asi que un -DL2_SETS=... del
+  // barrido tambien se prueba aqui. Las pruebas 7 y 8 recorren hasta 2 x WAYS
+  // lineas del mismo conjunto, y eso tiene que caber en la memoria de lineas.
+  localparam int WAYS = `L2_WAYS;
+  localparam int SETS = `L2_SETS;
+
+  initial begin
+    if (2 * WAYS * SETS > `MEM_LINES)
+      $fatal(1, "tb_l2_cache: %0d vias x %0d conjuntos no caben en las pruebas 7 y 8",
+             WAYS, SETS);
+  end
 
   // Latencia de memoria del modelo de abajo. No es T_MEM porque aqui no hay
   // mem_controller: es un numero corto para que la prueba no tarde, y lo unico
@@ -404,23 +413,24 @@ module tb_l2_cache();
 
     // ------------------------------------------------------------------------
     $display("");
-    $display("[7] LRU exacto de cuatro vias");
+    $display("[7] LRU exacto de %0d vias", WAYS);
     // ------------------------------------------------------------------------
-    // Cinco lineas distintas que caen en el mismo conjunto. Con SETS=128, las
-    // lineas 0, 128, 256, 384 y 512 comparten el conjunto 0.
-    // Se tocan cuatro, se vuelve a tocar la primera para que deje de ser la
-    // mas vieja, y la quinta tiene que expulsar a la SEGUNDA.
-    for (i = 0; i < 4; i++) leer(i * SETS);     // llena las cuatro vias
+    // WAYS + 1 lineas distintas que caen en el mismo conjunto: las multiplos
+    // de SETS comparten el conjunto 0 (con la geometria del enunciado, 0, 128,
+    // 256, 384 y 512). Se llenan las WAYS vias, se vuelve a tocar la primera
+    // para que deje de ser la mas vieja, y la siguiente tiene que expulsar a
+    // la SEGUNDA.
+    for (i = 0; i < WAYS; i++) leer(i * SETS);  // llena todas las vias
     leer(0);                                    // la 0 pasa a ser la mas nueva
 
     ev_antes = ev_n;
     inv_n    = 0;
-    leer(4 * SETS);                             // la quinta: alguien sale
+    leer(WAYS * SETS);                          // una de mas: alguien sale
 
     check("la quinta linea del conjunto es un fallo", n_ld_miss, 1);
     check("hubo invalidacion hacia atras",            (inv_n > 0), 1'b1);
     linea_aux = SETS[`MEM_LIDX_W-1:0];
-    check("y se invalido la linea 128, la menos usada",
+    check("y se invalido la linea SETS, la menos usada",
           inv_ultima, linea_aux);
 
     // Las cinco lineas eran limpias, asi que no debio salir nada al buffer
@@ -439,10 +449,8 @@ module tb_l2_cache();
     // ------------------------------------------------------------------------
     escribir(2 * SETS, linea_de(32'hDDDD_0002), {`LINE_MASK_W{1'b1}});
     ev_antes = ev_n;
-    leer(5 * SETS);                             // fuerza otra expulsion
-    leer(6 * SETS);
-    leer(7 * SETS);
-    leer(8 * SETS);
+    // WAYS lineas nuevas del mismo conjunto expulsan todo lo que habia
+    for (i = WAYS + 1; i <= 2 * WAYS; i++) leer(i * SETS);
 
     check("salieron lineas por el eviction buffer", (ev_n > ev_antes), 1'b1);
 
