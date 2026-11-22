@@ -59,7 +59,7 @@ Hay dos memorias separadas, una para instrucciones y otra para datos. A esto se 
 
 ### 1.3 Diagrama de bloques
 
-![Diagrama de bloques de CERBERO-1](imgs/VLIW_CPU.png)
+![Diagrama de bloques de CERBERO-1](../imgs/VLIW_CPU.png)
 
 El diagrama se lee de izquierda a derecha, en el orden en que un bundle avanza por las cinco etapas. Las barras grises son las fronteras entre etapas: IF/ID, ID/EX y EX/MEM son registros de segmentación, y MEM/WB la forman el propio banco de registros y el PSW, que escriben en el flanco que abre WB.
 

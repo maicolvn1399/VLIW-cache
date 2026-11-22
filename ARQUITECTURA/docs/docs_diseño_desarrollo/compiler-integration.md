@@ -10,7 +10,7 @@ del enunciado.
 | Procesador | CERBERO-1, CE4301 Arquitectura de Computadores I, Grupo #4 |
 | Compilador | `novac`, lenguaje Nova, CE1108 Compiladores e Intérpretes |
 | Contraparte CE1108 | Araya Porras Luis Diego · Piedra Montero Joseph · Somarribas Montero Isaac |
-| Especificación compartida | [`isa.md`](isa.md), con su registro de cambios en la sección 14 |
+| Especificación compartida | [`isa.md`](../isa.md), con su registro de cambios en la sección 14 |
 | Documentación del compilador | `documentacion/documentacion_compilador.pdf`, en el proyecto unificado |
 | Proyecto unificado | Rama `integracion_global`: el compilador en la raíz y este procesador en `ARQUITECTURA/` |
 
@@ -44,9 +44,9 @@ el resultado es el mismo binario.
 | Obligación de CE4301 | Cómo se cumple |
 | :--- | :--- |
 | Un ensamblador propio, autónomo, que ejercite el 100 % del conjunto | `ARQUITECTURA/tools/cerbero_asm.py`. `ARQUITECTURA/tools/programas/cobertura.s` usa los 63 mnemónicos y `make cobertura` lo comprueba. `probar_asm.py` tiene 71 casos y verifica que ningún mnemónico quede sin cubrir |
-| Entregar la especificación completa del ISA, con la codificación binaria exacta de cada instrucción y slot, y la sintaxis del ensamblador | [`isa.md`](isa.md): formato del bundle, los ocho formatos de slot, tablas de opcodes, convención de registros (sección 1.1) y sintaxis del ensamblador (sección 10) |
+| Entregar la especificación completa del ISA, con la codificación binaria exacta de cada instrucción y slot, y la sintaxis del ensamblador | [`isa.md`](../isa.md): formato del bundle, los ocho formatos de slot, tablas de opcodes, convención de registros (sección 1.1) y sintaxis del ensamblador (sección 10) |
 | Poner a disposición el modelo de simulación | El RTL completo en `ARQUITECTURA/src/cpu`, con `make correr` para ejecutar cualquier programa y un testbench propio de la contraparte, `test/tb_nova_rtl.sv`, que instancia el `top` sin cambios |
-| Comunicar formalmente todo cambio posterior al congelamiento | La sección 14 de [`isa.md`](isa.md), versiones v1.1 a v1.6. Cada cambio indica si afecta o no al emisor de binario |
+| Comunicar formalmente todo cambio posterior al congelamiento | La sección 14 de [`isa.md`](../isa.md), versiones v1.1 a v1.6. Cada cambio indica si afecta o no al emisor de binario |
 
 El intercambio funcionó en los dos sentidos. La v1.6 del ISA, que corrige cómo
 se extrae un criptograma a un archivo, salió de una pregunta del grupo de CE1108

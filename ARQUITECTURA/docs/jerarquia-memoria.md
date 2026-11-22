@@ -4,7 +4,7 @@ CE-4301 Arquitectura de Computadores I · Proyecto Grupal II · Grupo #4 · CERB
 
 Sección 1 de la documentación de diseño: decisiones de caché, políticas de escritura, reemplazo e inclusión con su justificación, parámetros de los write buffers obligatorios, y diagramas de la jerarquía y su integración con el pipeline.
 
-Complementos: [organizacion.md](organizacion.md) (microarquitectura), [analisis-rendimiento.md](analisis-rendimiento.md) (medición y resultados). El detalle de cada iteración, con los errores encontrados, está en [metricas.md](metricas.md), [memoria.md](memoria.md) y [cache.md](cache.md).
+Complementos: [organizacion.md](organizacion.md) (microarquitectura), [analisis-rendimiento.md](analisis-rendimiento.md) (medición y resultados). El detalle de cada iteración, con los errores encontrados, está en [metricas.md](docs_diseño_desarrollo/metricas.md), [memoria.md](docs_diseño_desarrollo/memoria.md) y [cache.md](docs_diseño_desarrollo/cache.md).
 
 ---
 

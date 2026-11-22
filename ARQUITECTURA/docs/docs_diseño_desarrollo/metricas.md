@@ -17,8 +17,8 @@ Iteración 2 va a eliminar.
 > y por eso habla de la caché en futuro. Desde entonces `perf_counters.sv` pasó
 > de los 12 contadores de la sección 2 a 31, con los de L1-D, L2, inclusión y
 > memoria principal (sección 2), y su testbench de 54 a 95 casos. La lista
-> completa está en [organizacion.md](organizacion.md) y su uso en
-> [analisis-rendimiento.md](analisis-rendimiento.md).
+> completa está en [organizacion.md](../organizacion.md) y su uso en
+> [analisis-rendimiento.md](../analisis-rendimiento.md).
 
 ---
 

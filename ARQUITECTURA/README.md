@@ -22,15 +22,15 @@ programas en ensamblador y con código generado por NOVA.
 | **Análisis de rendimiento y validación (Proyecto II)** | [`docs/analisis-rendimiento.md`](docs/analisis-rendimiento.md) |
 | **Registro de decisiones (Proyecto II)** | [`docs/decisiones.md`](docs/decisiones.md) |
 | Especificación del ISA | [`docs/isa.md`](docs/isa.md) |
-| Microarquitectura del Proyecto I | [`docs/microarchitecture.md`](docs/microarchitecture.md) |
-| Modelo de simulación | [`docs/simulation.md`](docs/simulation.md) |
-| Métricas y línea base (Proyecto II, Iteración 1) | [`docs/metricas.md`](docs/metricas.md) |
-| Memoria principal y T_mem (Proyecto II, Iteración 2) | [`docs/memoria.md`](docs/memoria.md) |
-| Caché L1-D e integración (Proyecto II, Iteración 3) | [`docs/cache.md`](docs/cache.md) |
-| Integración con CE1108 | [`docs/compiler-integration.md`](docs/compiler-integration.md) |
-| **Respuesta a la revisión** | [`docs/respuesta_a_la_revision.md`](docs/respuesta_a_la_revision.md) |
-| **Escribir un programa de cero** | [`docs/escribir_programas.md`](docs/escribir_programas.md) |
-| **Del fuente al binario** | [`docs/del_fuente_al_binario.md`](docs/del_fuente_al_binario.md) |
+| Microarquitectura del Proyecto I | [`docs/microarchitecture.md`](docs/docs_diseño_desarrollo/microarchitecture.md) |
+| Modelo de simulación | [`docs/simulation.md`](docs/docs_diseño_desarrollo/simulation.md) |
+| Métricas y línea base (Proyecto II, Iteración 1) | [`docs/metricas.md`](docs/docs_diseño_desarrollo/metricas.md) |
+| Memoria principal y T_mem (Proyecto II, Iteración 2) | [`docs/memoria.md`](docs/docs_diseño_desarrollo/memoria.md) |
+| Caché L1-D e integración (Proyecto II, Iteración 3) | [`docs/cache.md`](docs/docs_diseño_desarrollo/cache.md) |
+| Integración con CE1108 | [`docs/compiler-integration.md`](docs/docs_diseño_desarrollo/compiler-integration.md) |
+| **Respuesta a la revisión** | [`docs/respuesta_a_la_revision.md`](docs/docs_diseño_desarrollo/respuesta_a_la_revision.md) |
+| **Escribir un programa de cero** | [`docs/escribir_programas.md`](docs/docs_diseño_desarrollo/escribir_programas.md) |
+| **Del fuente al binario** | [`docs/del_fuente_al_binario.md`](docs/docs_diseño_desarrollo/del_fuente_al_binario.md) |
 
 ---
 
@@ -542,7 +542,7 @@ desenrollarlo es lo que las pone a la vista del planificador.
 
 Los cuatro dan 89440. El empaquetado solo vale 1.76×; desenrollar y empaquetar,
 **3.98×**. La guía completa, con los patrones y el ejemplo mínimo, está en
-[`docs/escribir_programas.md`](docs/escribir_programas.md).
+[`docs/escribir_programas.md`](docs/docs_diseño_desarrollo/escribir_programas.md).
 
 ---
 
@@ -577,7 +577,7 @@ Los cuatro dan 89440. El empaquetado solo vale 1.76×; desenrollar y empaquetar,
 | `cifrado` | 13 | **Un archivo cualquiera**: `make cifrar ARCHIVO=...` sobre un archivo y una llave dados en la línea de comandos, con `probar_flujo.py` de oráculo en vez de valores fijos |
 | `credencial` | 7 | **La credencial equivocada**: el `LOGIN` no coincide, `AUTHFAIL` se enciende, las rondas se anulan con `DENIED` y el archivo queda sin cifrar |
 | `ejemplos` | 41 | **Los programas de demostración, comprobados**: `fibonacci.s` contra la sucesión que el testbench calcula por su cuenta, los seis resultados de `estadisticas.s` (que llama a `__div32` con enlace y retorno) y las tres fotos del PSW de `sesion_sin_logout.s` |
-| `sum` | 3 | **La validación con CE1108**: `suma_10_15.s`, ensamblado con `cerbero_asm.py` y corriendo en este procesador. El origen del programa y la evidencia de la validación conjunta están en [`docs/compiler-integration.md`](docs/compiler-integration.md) |
+| `sum` | 3 | **La validación con CE1108**: `suma_10_15.s`, ensamblado con `cerbero_asm.py` y corriendo en este procesador. El origen del programa y la evidencia de la validación conjunta están en [`docs/compiler-integration.md`](docs/docs_diseño_desarrollo/compiler-integration.md) |
 | `logout` | 15 | **La bóveda sin `LOGOUT`**: una rutina abre sesión dentro de la región segura y vuelve sin cerrarla; el hardware la cierra solo al cruzar la frontera, y una ronda intentada después se anula con `DENIED`. Registra el ciclo y el PC de cada flanco de `AUTH` |
 | `vliw` | 7 | **Cuánto cuesta no llenar el bundle**: el mismo cálculo con y sin trabajo independiente, verificando que dan el mismo resultado y midiendo los ciclos de cada uno |
 | **`l1_dcache`** | 55 | **Proyecto II.** Fallo y acierto, las dos vías de un conjunto, la víctima LRU, el acierto en un ciclo, write-through con no-write-allocate, un store empujado una sola vez aunque el pipeline espere, el conflicto RAW contra el write buffer, stores de byte y media palabra, la invalidación hacia atrás, y todo eso con el T_mem real |
@@ -633,17 +633,18 @@ ARQUITECTURA/
 │   ├── organizacion.md          Diagramas de bloques y flujo del sistema extendido
 │   ├── analisis-rendimiento.md  Metodología, benchmarks, resultados y comparaciones
 │   ├── decisiones.md            Registro de decisiones de diseño
-│   ├── metricas.md              Contadores y línea base (Iteración 1)
-│   ├── memoria.md               Memoria principal y T_mem (Iteración 2)
-│   ├── cache.md                 La L1-D y su integración (Iteración 3)
 │   ├── isa.md                   Especificación del ISA (contrato con CE1108)
-│   ├── microarchitecture.md     Organización interna del Proyecto I
-│   ├── simulation.md            Modelo de simulación
-│   ├── compiler-integration.md  Contrato con CE1108 y validación conjunta
-│   ├── escribir_programas.md    Guía para escribir un programa
-│   ├── del_fuente_al_binario.md Del fuente al binario
-│   ├── respuesta_a_la_revision.md
-│   └── imgs/                    Figuras; it5_*.png son los gráficos del barrido
+│   ├── imgs/                    Figuras; it5_*.png son los gráficos del barrido
+│   └── docs_diseño_desarrollo/  Bitácoras de iteración y documentos de apoyo
+│       ├── metricas.md              Contadores y línea base (Iteración 1)
+│       ├── memoria.md               Memoria principal y T_mem (Iteración 2)
+│       ├── cache.md                 La L1-D y su integración (Iteración 3)
+│       ├── microarchitecture.md     Organización interna del Proyecto I
+│       ├── simulation.md            Modelo de simulación
+│       ├── compiler-integration.md  Contrato con CE1108 y validación conjunta
+│       ├── escribir_programas.md    Guía para escribir un programa
+│       ├── del_fuente_al_binario.md Del fuente al binario
+│       └── respuesta_a_la_revision.md
 ├── tools/
 │   ├── cerbero_asm.py           Ensamblador propio
 │   ├── probar_asm.py            Sus pruebas, 71 casos

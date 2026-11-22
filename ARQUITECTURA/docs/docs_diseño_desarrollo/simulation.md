@@ -244,9 +244,9 @@ El programa calcula F(0) a F(46) y los guarda en memoria desde `0x100`, uno por 
 `escrituras_fibonacci.txt` tiene cada escritura, con su ciclo e instrucción.
 Por ejemplo, el `sw` que guarda F(46)
 
-![make correr PROG=fibonacci](imgs/ejecucion_fibonacci.png)
+![make correr PROG=fibonacci](../imgs/ejecucion_fibonacci.png)
 
-![resultado de fibonacci al finalizar ejecución](imgs/resultado_fibonacci.png)
+![resultado de fibonacci al finalizar ejecución](../imgs/resultado_fibonacci.png)
 
 
 ### 7.2 Cifrar un archivo
@@ -259,7 +259,7 @@ El archivo de prueba es `tools/programas/archivo_prueba.txt`, que contiene el te
 python3 ../../tools/load_file.py --input ../../tools/programas/archivo_prueba.txt --output entrada.hex
 ```
 
-![Uso de herramienta load_file en Python](imgs/cifrado_python.png)
+![Uso de herramienta load_file en Python](../imgs/cifrado_python.png)
 
 
 Los 23 bytes ocupan 3 bloques de 64 bits; el último se completa con un byte en cero. La cabecera en `0x4000` guarda el tamaño original para poder quitar ese relleno al final.
@@ -270,7 +270,7 @@ Los 23 bytes ocupan 3 bloques de 64 bits; el último se completa con un byte en 
 make correr PROG=cifrar_archivo MEMORIA=entrada.hex VOLCADO=cifrado.hex
 ```
 
-![Uso de herramienta make correr para cifrar](imgs/cifrado_vliw.png)
+![Uso de herramienta make correr para cifrar](../imgs/cifrado_vliw.png)
 
 **Paso 3: sacar el archivo cifrado de la memoria.**
 
@@ -278,7 +278,7 @@ make correr PROG=cifrar_archivo MEMORIA=entrada.hex VOLCADO=cifrado.hex
 python3 ../../tools/extract_data.py cifrado.hex -o cifrado.bin --cifrado
 xxd cifrado.bin
 ```
-![Extracción archivo cifrado usando herramienta en Python](imgs/extraccion_cifrado_python.png)
+![Extracción archivo cifrado usando herramienta en Python](../imgs/extraccion_cifrado_python.png)
 
 **Qué demuestra:**
 
@@ -317,7 +317,7 @@ cat descifrado.txt
 cmp descifrado.txt ../../tools/programas/archivo_prueba.txt && echo IDENTICOS
 ```
 
-![Descifrado y comparación](imgs/comprobacion.png)
+![Descifrado y comparación](../imgs/comprobacion.png)
 
 Lo que se demuestra: el descifrado es la operación inversa exacta del cifrado.
 La columna "antes" del descifrado es la columna "ahora" del cifrado, y el resultado son otra vez los bytes originales. `cmp` no encuentra ninguna diferencia, y el archivo sale con sus 23 bytes: el relleno se quitó usando la cabecera.

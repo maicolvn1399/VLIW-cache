@@ -4,7 +4,7 @@ CE-4301 Arquitectura de Computadores I · Proyecto Grupal II · Grupo #4 · CERB
 
 Sección 2 de la documentación de diseño: organización interna en SystemVerilog, diagramas de bloques de los componentes principales con sus interconexiones, y flujo de datos e instrucciones.
 
-Complementos: [jerarquia-memoria.md](jerarquia-memoria.md) (políticas) y [analisis-rendimiento.md](analisis-rendimiento.md) (resultados). El pipeline base y las unidades funcionales del Proyecto I están en [microarchitecture.md](microarchitecture.md); aquí se repite solo lo necesario para ubicar lo nuevo.
+Complementos: [jerarquia-memoria.md](jerarquia-memoria.md) (políticas) y [analisis-rendimiento.md](analisis-rendimiento.md) (resultados). El pipeline base y las unidades funcionales del Proyecto I están en [microarchitecture.md](docs_diseño_desarrollo/microarchitecture.md); aquí se repite solo lo necesario para ubicar lo nuevo.
 
 ---
 
