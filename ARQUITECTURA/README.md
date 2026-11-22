@@ -1,20 +1,32 @@
 # CERBERO-1
 
-Procesador VLIW con ISA propia para aceleración de cifrado por bloques Feistel4.
+Procesador VLIW con ISA propia para aceleración de cifrado por bloques Feistel4,
+extendido con una jerarquía de caché de datos de dos niveles y contadores de
+rendimiento por hardware.
 
-**CE-4301 Arquitectura de Computadores I — Proyecto Grupal I — Grupo #4**
+**CE-4301 Arquitectura de Computadores I — Proyectos Grupales I y II — Grupo #4**
 Escuela de Ingeniería en Computadores, Instituto Tecnológico de Costa Rica.
+
+El Proyecto I definió el ISA y el procesador. El Proyecto II, conjunto con
+CE-1108 (compilador NOVA), le agrega una L1-D, una L2 unificada, memoria
+principal en otro dominio de reloj, write buffer, eviction buffer y los
+contadores que miden todo eso, y analiza el rendimiento del sistema con
+programas en ensamblador y con código generado por NOVA.
 
 | | |
 |---|---|
 | Profesor | Dr.-Ing. Jeferson González Gómez |
 | Integrantes | Araya Porras Luis Diego (2021086423) · Retana Murillo Braulio (2021050678) · Valverde Navarro Michael (2020044189) · Piedra Montero Joseph (2023047830) · Muñoz Alvarado Adrián (2023207992) |
-| Especificación | [`docs/isa.md`](docs/isa.md) |
-| Microarquitectura | [`docs/microarchitecture.md`](docs/microarchitecture.md) |
+| **Jerarquía de memoria: políticas y su justificación (Proyecto II)** | [`docs/jerarquia-memoria.md`](docs/jerarquia-memoria.md) |
+| **Organización y microarquitectura del sistema extendido (Proyecto II)** | [`docs/organizacion.md`](docs/organizacion.md) |
+| **Análisis de rendimiento y validación (Proyecto II)** | [`docs/analisis-rendimiento.md`](docs/analisis-rendimiento.md) |
+| **Registro de decisiones (Proyecto II)** | [`docs/decisiones.md`](docs/decisiones.md) |
+| Especificación del ISA | [`docs/isa.md`](docs/isa.md) |
+| Microarquitectura del Proyecto I | [`docs/microarchitecture.md`](docs/microarchitecture.md) |
 | Modelo de simulación | [`docs/simulation.md`](docs/simulation.md) |
-| **Métricas y línea base (Proyecto II)** | [`docs/metricas.md`](docs/metricas.md) |
-| **Memoria principal y T_mem (Proyecto II)** | [`docs/memoria.md`](docs/memoria.md) |
-| **Caché L1-D e integración (Proyecto II)** | [`docs/cache.md`](docs/cache.md) |
+| Métricas y línea base (Proyecto II, Iteración 1) | [`docs/metricas.md`](docs/metricas.md) |
+| Memoria principal y T_mem (Proyecto II, Iteración 2) | [`docs/memoria.md`](docs/memoria.md) |
+| Caché L1-D e integración (Proyecto II, Iteración 3) | [`docs/cache.md`](docs/cache.md) |
 | Integración con CE1108 | [`docs/compiler-integration.md`](docs/compiler-integration.md) |
 | **Respuesta a la revisión** | [`docs/respuesta_a_la_revision.md`](docs/respuesta_a_la_revision.md) |
 | **Escribir un programa de cero** | [`docs/escribir_programas.md`](docs/escribir_programas.md) |
@@ -25,8 +37,10 @@ Escuela de Ingeniería en Computadores, Instituto Tecnológico de Costa Rica.
 ## Qué es
 
 Un bundle de 128 bits con cinco slots de ancho desigual, siete unidades
-funcionales y calendarización estática: el hardware no detecta riesgos, no
-reenvía resultados y no se detiene nunca.
+funcionales y calendarización estática: el hardware no detecta riesgos entre
+bundles ni reenvía resultados. Lo único que lo detiene son los stalls
+estructurales de la jerarquía de memoria: un fallo de caché, un buffer lleno o
+un conflicto RAW contra el write buffer.
 
 ```
  127                96 95                 64 63                 32 31        16 15         0
@@ -46,7 +60,7 @@ reenvía resultados y no se detiene nunca.
 | S4 | Saltos y enlace | `bru.sv` |
 | — | Banco de registros, 9 lecturas y 7 escrituras | `regfile.sv` |
 | — | Memoria de instrucciones, 2048 bundles de 128 bits | `imem.sv` |
-| — | Memoria de datos, 64 KB con escritura por carril | `dmem.sv` |
+| — | Memoria de datos ideal de un ciclo del Proyecto I; el procesador ya no la usa, queda como referencia | `dmem.sv` |
 | — | Etapa ID: rebanado del bundle y enrutado de lecturas | `dispatch.sv` |
 | — | PSW y resolución de fallas | `psw_fault_unit.sv` |
 | — | Etapa IF: contador de programa, salto y detención | `fetch.sv` |
@@ -54,7 +68,32 @@ reenvía resultados y no se detiene nunca.
 | — | Frontera ID/EX: slots y los 9 valores leídos | `reg_id_ex.sv` |
 | — | Frontera EX/MEM: los 7 puertos de escritura y las 5 fallas | `reg_ex_mem.sv` |
 | — | Extracción del carril de una carga, en MEM | `load_align.sv` |
-| — | **El procesador completo** | `top.sv` |
+| — | **El procesador completo, con la jerarquía de memoria** | `top.sv` |
+
+### La jerarquía de memoria de datos (Proyecto II)
+
+```
+ LSU ─▶ L1-D ─▶ write buffer ─▶ árbitro ─▶ L2 ─▶ eviction buffer ─▶ memoria principal
+         ▲                                  │      (en mem_system, a 25 MHz)
+         └──── invalidación hacia atrás ────┘
+```
+
+| Nivel | Configuración | Módulo |
+|---|---|---|
+| L1-D | 4 KB, 2 vías, líneas de 32 B, write-through, no-write-allocate, LRU de 1 bit, acierto en 1 ciclo | `l1_dcache.sv` |
+| Write buffer (L1 a L2) | 8 entradas con fusión por línea; el RAW contra él se resuelve con stall | `eviction_buffer.sv` (`u_write_buffer`) |
+| Árbitro | un solo puerto de L2 para los rellenos de L1 y los drenados del write buffer; la lectura gana | `l2_arbiter.sv` |
+| L2 unificada | 16 KB, 4 vías, write-back, write-allocate, LRU exacto por edades, acierto en 8 ciclos, **inclusiva** con invalidación hacia atrás | `l2_cache.sv` |
+| Eviction buffer (L2 a memoria) | 8 entradas | `eviction_buffer.sv` (`u_evict`) |
+| Memoria principal | 64 KB a 25 MHz (÷4), ráfaga de 8 palabras: T_mem = 53 ciclos | `mem_system.sv`, `mem_controller.sv`, `mem_clock_gen.sv`, `main_memory.sv` |
+| Contadores | 31 contadores saturantes: IPC, stalls por causa, aciertos y fallos por nivel, invalidaciones, accesos y ciclos de memoria | `perf_counters.sv` |
+
+La geometría y las latencias viven en `src/cpu/cerbero_defs.svh` y se pueden
+sobreescribir desde la línea de comandos para un barrido. Con
+`-DCERBERO_SIN_L2` se quita la L2 y el árbitro va directo a memoria, que es la
+línea base del análisis. El diagrama de bloques completo está en
+[`docs/organizacion.md`](docs/organizacion.md) y la justificación de cada
+política en [`docs/jerarquia-memoria.md`](docs/jerarquia-memoria.md).
 
 ### Herramientas
 
@@ -78,6 +117,13 @@ reenvía resultados y no se detiene nunca.
 | Lazo de 100 000 vueltas, a mano | `tools/programas/lazo_estres.s` |
 | Subrutina de división de 32 bits | `tools/programas/div32.s` |
 | Programa que usa el 100% del conjunto | `tools/programas/cobertura.s` |
+| Planificador: empaqueta operaciones independientes en un bundle | `tools/empacar.py` |
+| **Patrones de acceso a memoria** (secuencial, stride, aleatorio, con reuso) | `tools/programas/patron_*.s` |
+| Recorrido escrito para saturar el write buffer | `tools/programas/recorrido_cache.s` |
+| **Barrido de la jerarquía**: base, sin L2, capacidades de L1 y de L2 | `tools/barrido_jerarquia.sh` |
+| Tablas y gráficos del barrido | `tools/tabla_analisis.py` |
+| Tabla de las métricas de todos los programas | `tools/tabla_metricas.py` |
+| Barrido de capacidad de L1 de la Iteración 3, sin L2 | `tools/barrido_cache.sh`, `tools/tabla_barrido.py` |
 
 Las tres unidades de S3 se excluyen entre sí: el opcode del slot decide cuál
 actúa. O el programa cifra, o usa la ALU corta.
@@ -93,6 +139,7 @@ actúa. O el programa cifra, o usa la ALU corta.
 | [Verilator](https://verilator.org/) | 5.x | Solo análisis estático (`make lint`); la simulación es con Icarus. Opcional pero recomendado |
 | [GTKWave](https://gtkwave.sourceforge.net/) | cualquiera | Ver formas de onda. Opcional |
 | `make` | GNU Make | |
+| `bash` | cualquiera | Solo para `make analisis` y los barridos. Viene con WSL, MSYS2 y Git Bash |
 
 ```bash
 # Ubuntu, Debian y WSL
@@ -128,13 +175,18 @@ Todo se corre desde `src/build`:
 ```bash
 cd src/build
 
-make            # pruebas de las herramientas, los treinta testbenches y el flujo
+make            # pruebas de las herramientas, todos los testbenches y el flujo
+make jerarquia  # solo la jerarquía: mem_system, l1_dcache, l2_cache, l2_arbiter, eviction_buffer
+make patrones   # los patrones de acceso contra sus oráculos exactos
+make correr PROG=patron_reuso   # un programa y su informe completo de métricas
+make metricas   # el informe de todos los programas, en una tabla
+make analisis   # el barrido de la jerarquía, sus tablas y sus gráficos
 make ocupacion  # cuánto del bundle usa cada programa
 make empacar PROG=x.s   # empaqueta operaciones independientes en un bundle
 make vliw       # el mismo cálculo con y sin paralelismo, y sus ciclos
 make logout     # ¿queda la bóveda abierta si no se hace LOGOUT?
 make huella ARCHIVO=x   # SHA-256 del criptograma, para comparar por fuera
-make lint       # análisis estático de las diecisiete unidades
+make lint       # análisis estático con Verilator (opcional)
 make top        # corre los siete programas sobre el procesador completo
 make archivo    # cifra y descifra un archivo completo sobre el RTL
 make flujo      # y lo descifra con un modelo de referencia en Python
@@ -189,6 +241,78 @@ de un segundo, así que un `.s` editado y su `.hex` ya existente pueden caer en
 el mismo segundo y `make` se salta el reensamblado. El resultado es una
 simulación que corre el binario anterior y falla sin motivo aparente. Ante
 cualquier resultado que no cuadre, `make clean && make`.
+
+### La jerarquía de memoria y el análisis de rendimiento
+
+`make correr` ejecuta un programa sobre el procesador completo e imprime lo
+que miden los contadores de hardware. El informe queda también en
+`src/build/resultado_<programa>.txt`. Un extracto de
+`make correr PROG=patron_reuso`, que recorre dos veces 8 KB, el doble de la
+L1 y la mitad de la L2:
+
+```
+  cache L1-D (4096 B, 2 vias, 64 conjuntos, lineas de 32 B,
+              write-through, no-write-allocate, LRU)
+    accesos totales                     513
+      lecturas: fallos                  512
+    ciclos perdidos, por causa
+      fallo de lectura                18176
+        que acerto en L2               2048
+        que fallo en L2               16128
+
+  cache L2 unificada (16 KB, 4 vias, 128 conjuntos, write-back,
+                      write-allocate, LRU exacto, hit time 8)
+      lecturas: aciertos                256
+      lecturas: fallos                  256
+    invalidaciones hacia atras            0  (ejecutadas sobre L1-D)
+
+  memoria principal
+    accesos (lineas completas)          258
+    utilizacion del bus              59.48%  (del reset al drenado completo)
+
+  AMAT de lectura con dos niveles
+    teorico                           36.50 ciclos  (T_L1=1, T_L2=8, T_mem=53+2)
+    medido                            36.50 ciclos
+    ok     stall_l2_hit + stall_l2_miss = stall_por_miss 18176
+```
+
+Las líneas `ok` son comprobaciones cruzadas entre contadores independientes;
+si alguna sale `FALLA`, el informe no es confiable.
+
+**Configuraciones.** Las constantes de la jerarquía se sobreescriben con
+`XFLAGS_EXTRA`. Como el `.vvp` guarda la configuración con que se compiló,
+hay que hacer `make clean` al cambiarla:
+
+```bash
+make clean && make correr PROG=patron_reuso XFLAGS_EXTRA=-DCERBERO_SIN_L2     # sin L2
+make clean && make correr PROG=patron_reuso \
+     XFLAGS_EXTRA="-DL2_BYTES=8192 -DL2_SETS=64"                               # L2 de 8 KB
+```
+
+⚠️ El preprocesador de Verilog no divide, así que las constantes de un nivel
+se pasan coherentes entre sí: `L2_BYTES = L2_SETS × L2_WAYS × 32`, y para la
+L1 las cuatro (`L1D_BYTES`, `L1D_WAYS`, `L1D_SETS`, `L1D_SIDX_W`). La L2
+aborta si la combinación es incoherente. La L1 es de exactamente 2 vías.
+
+**Binarios de NOVA.** Un programa compilado por NOVA se corre con sus dos
+imágenes, las que genera `tools/novac_image.py`:
+
+```bash
+make correr HEX=programa.nova.hex MEMORIA=programa.nova_d.hex
+```
+
+⚠️ Con `HEX=` solo, se carga la memoria de instrucciones pero no la de datos:
+un programa con datos inicializados corre sin fallar y da un resultado
+equivocado.
+
+**El barrido.** `make analisis` corre `tools/barrido_jerarquia.sh` sobre once
+configuraciones (base, sin L2, cinco capacidades de L1 y cuatro de L2) con
+catorce programas, y después `tools/tabla_analisis.py`. Tarda unos minutos.
+Deja los informes crudos en `barrido/jerarquia/<configuración>/`, las tablas
+en `barrido/jerarquia/tablas.md` y los gráficos en `docs/imgs/it5_*.png`.
+`make tablas-analisis` regenera solo las tablas y los gráficos sobre el
+barrido que ya existe. El análisis de esos resultados está en
+[`docs/analisis-rendimiento.md`](docs/analisis-rendimiento.md).
 
 ### El ensamblador propio
 
@@ -439,11 +563,11 @@ Los cuatro dan 89440. El empaquetado solo vale 1.76×; desenrollar y empaquetar,
 | `psw_fault_unit` | 41 | Las 16 combinaciones de banderas, las 6 causas en los 5 slots, los 10 pares de prioridad, `EXC` pegajoso, `WCONF` puerto por puerto |
 | `crypto_vault` | 90 | **Integración**: bóveda y unidad de ronda juntas, contra el modelo de referencia |
 | `latency` | 3 | **Integración**: mide la latencia expuesta contra el modelo de pipeline y la compara con los 3 bundles del ISA |
-| `reg_if_id` | 13 | Retraso de un ciclo exacto medido sobre una secuencia, independencia de `valid` y `pc` |
-| `reg_id_ex` | 18 | Aislamiento de los 12 campos con huella de bits, los 9 puertos de lectura uno por uno |
+| `reg_if_id` | 20 | Retraso de un ciclo exacto medido sobre una secuencia, independencia de `valid` y `pc` |
+| `reg_id_ex` | 32 | Aislamiento de los 12 campos con huella de bits, los 9 puertos de lectura uno por uno |
 | `reg_ex_mem` | 10 | Aislamiento de los 10 campos, los 7 puertos de escritura y las 5 causas elemento por elemento |
 | `wconf` | 12 | **Integración**: 4000 vectores aleatorios comparando los dos detectores de conflicto de escritura, el del banco y el del PSW |
-| `fetch` | 41 | Avance de 16 en 16, salto tomado, destino desalineado forzado a múltiplo de 16, `HALT` congela el PC y apaga `valid`, el reset lo libera |
+| `fetch` | 50 | Avance de 16 en 16, salto tomado, destino desalineado forzado a múltiplo de 16, `HALT` congela el PC y apaga `valid`, el reset lo libera |
 | `pipeline` | 6 | **Integración**: mide la latencia expuesta sobre la cadena real de registros más el banco, y que el PC acompañe al bundle en ID y en EX |
 | `fetch_flow` | 23 | **Integración**: `fetch`, `imem`, `reg_if_id` y `bru` sobre un programa de saltos; un delay slot exacto por salto, el de `HALT` se ejecuta, y el caso medido de un salto dentro de un delay slot |
 | `top` | 45 | **El procesador completo** corriendo siete programas: aritmética con la latencia de 3 bundles, memoria en los tres tamaños con y sin signo, llamada y retorno, **cifrado Feistel4 completo** contra valores calculados fuera del simulador, la misma rutina denegada fuera de la región segura, `ILLOP` y `MISALIGN`, y que nada se ejecute después de `HALT` |
@@ -452,11 +576,19 @@ Los cuatro dan 89440. El empaquetado solo vale 1.76×; desenrollar y empaquetar,
 | `archivo` | 29 | **La cadena completa sobre un archivo real**: dos procesadores, uno cifra y el otro descifra lo que el primero dejó en memoria; criptograma contra valores calculados fuera del simulador, el archivo recuperado byte por byte, la cabecera intacta, un barrido de los 64 KB de las dos memorias buscando subllaves filtradas, y que ni la llave ni la credencial queden en el banco de registros |
 | `cifrado` | 13 | **Un archivo cualquiera**: `make cifrar ARCHIVO=...` sobre un archivo y una llave dados en la línea de comandos, con `probar_flujo.py` de oráculo en vez de valores fijos |
 | `credencial` | 7 | **La credencial equivocada**: el `LOGIN` no coincide, `AUTHFAIL` se enciende, las rondas se anulan con `DENIED` y el archivo queda sin cifrar |
-| `ejemplos` | 23 | **Los programas de demostración, comprobados**: `fibonacci.s` contra la sucesión que el testbench calcula por su cuenta, los seis resultados de `estadisticas.s` (que llama a `__div32` con enlace y retorno) y las tres fotos del PSW de `sesion_sin_logout.s` |
+| `ejemplos` | 41 | **Los programas de demostración, comprobados**: `fibonacci.s` contra la sucesión que el testbench calcula por su cuenta, los seis resultados de `estadisticas.s` (que llama a `__div32` con enlace y retorno) y las tres fotos del PSW de `sesion_sin_logout.s` |
 | `sum` | 3 | **La validación con CE1108**: `suma_10_15.s`, ensamblado con `cerbero_asm.py` y corriendo en este procesador. El origen del programa y la evidencia de la validación conjunta están en [`docs/compiler-integration.md`](docs/compiler-integration.md) |
 | `logout` | 15 | **La bóveda sin `LOGOUT`**: una rutina abre sesión dentro de la región segura y vuelve sin cerrarla; el hardware la cierra solo al cruzar la frontera, y una ronda intentada después se anula con `DENIED`. Registra el ciclo y el PC de cada flanco de `AUTH` |
 | `vliw` | 7 | **Cuánto cuesta no llenar el bundle**: el mismo cálculo con y sin trabajo independiente, verificando que dan el mismo resultado y midiendo los ciclos de cada uno |
-| **Total** | **1775** | |
+| **`l1_dcache`** | 55 | **Proyecto II.** Fallo y acierto, las dos vías de un conjunto, la víctima LRU, el acierto en un ciclo, write-through con no-write-allocate, un store empujado una sola vez aunque el pipeline espere, el conflicto RAW contra el write buffer, stores de byte y media palabra, la invalidación hacia atrás, y todo eso con el T_mem real |
+| **`l2_cache`** | 37 | Fallo y acierto, el hit time medido contra la macro, write-back, write-allocate parcial que conserva los bytes de afuera, el atajo de línea completa, LRU exacto de N vías, la víctima sucia al eviction buffer, el stall por buffer lleno, el vaciado de fin de programa y el contrato `req`/`listo` durante toda la prueba |
+| **`l2_arbiter`** | 24 | Prioridad estricta a la lectura de L1, ninguna transacción abandonada a medias, `wb_drenando` durante todo el drenado |
+| **`eviction_buffer`** | 63 | FIFO, lleno y vaciado en orden, el conflicto RAW, la fusión por línea con la palabra más reciente ganando, depositar y drenar en el mismo ciclo, y que fusionar contra la cabeza que se drena no pierda el dato |
+| **`mem_system`** | 59 | La línea completa, **T_mem medido contra el teórico**, el desalojo aceptado en un ciclo y drenado solo, la lectura de una línea que todavía está en el buffer, la prioridad de la lectura |
+| **`mem_clock_gen`** | 14 | Sin ticks en reset, el periodo de `mem_clk`, cada `mem_tick` sobre un flanco de `mem_clk`, los divisores del rango permitido |
+| **`perf_counters`** | 95 | Cada contador con un estímulo dirigido: reset, ciclos y `HALT`, ocupación por ranura, bundles vacíos, un bundle congelado contado una sola vez, saltos, saturación, los contadores de L2 y los de la sección 5 del enunciado |
+| **`patrones`** | 24 | **Integración**: los patrones secuencial, stride, aleatorio y con reuso sobre el procesador completo, con **oráculos exactos** de aciertos y fallos en L1 y L2 calculados desde la geometría, y el costo de la inclusión |
+| **Total** | **2189** | |
 
 A eso se suman **151 casos** de las herramientas en Python, que `make` corre antes y después de los testbenches:
 
@@ -475,7 +607,7 @@ cosa parecida.
 
 ### Autoprueba del arnés
 
-Un testbench que siempre pasa no prueba nada. Los treinta aceptan `-DFORCE_FAIL`,
+Un testbench que siempre pasa no prueba nada. Todos los que verifican, salvo `tb_sum`, aceptan `-DFORCE_FAIL`,
 que inyecta un caso deliberadamente incorrecto para comprobar que el arnés sabe
 reportar una falla:
 
@@ -490,26 +622,48 @@ vvp -n /tmp/f.vvp ; echo "codigo de salida: $?"     # debe ser distinto de 0
 ## Estructura
 
 ```
-VLIW-encryption-ISA/
+ARQUITECTURA/
 ├── README.md
+├── barrido/
+│   ├── jerarquia/               Barrido de la Iteración 5: un directorio por configuración
+│   │   └── tablas.md            Las tablas que genera tabla_analisis.py
+│   └── <capacidad>_2vias/       Barrido de capacidad de L1 de la Iteración 3
 ├── docs/
+│   ├── jerarquia-memoria.md     Políticas de la jerarquía y su justificación
+│   ├── organizacion.md          Diagramas de bloques y flujo del sistema extendido
+│   ├── analisis-rendimiento.md  Metodología, benchmarks, resultados y comparaciones
+│   ├── decisiones.md            Registro de decisiones de diseño
+│   ├── metricas.md              Contadores y línea base (Iteración 1)
+│   ├── memoria.md               Memoria principal y T_mem (Iteración 2)
+│   ├── cache.md                 La L1-D y su integración (Iteración 3)
 │   ├── isa.md                   Especificación del ISA (contrato con CE1108)
-│   ├── microarchitecture.md     Diagrama de bloques y organización interna
+│   ├── microarchitecture.md     Organización interna del Proyecto I
 │   ├── simulation.md            Modelo de simulación
-│   └── compiler-integration.md  Contrato con CE1108 y validación conjunta
+│   ├── compiler-integration.md  Contrato con CE1108 y validación conjunta
+│   ├── escribir_programas.md    Guía para escribir un programa
+│   ├── del_fuente_al_binario.md Del fuente al binario
+│   ├── respuesta_a_la_revision.md
+│   └── imgs/                    Figuras; it5_*.png son los gráficos del barrido
 ├── tools/
 │   ├── cerbero_asm.py           Ensamblador propio
 │   ├── probar_asm.py            Sus pruebas, 71 casos
-│   ├── load_file.py             Archivo a imagen de DMEM
-│   ├── extract_data.py          Volcado de DMEM a archivo
+│   ├── empacar.py               Planificador: junta operaciones independientes
+│   ├── load_file.py             Archivo a imagen de memoria
+│   ├── extract_data.py          Volcado de memoria a archivo
 │   ├── formato_buffer.py        El formato que comparten las dos
 │   ├── probar_archivos.py       Sus pruebas, 54 casos
 │   ├── llave.py                 La llave desde la línea de comandos
 │   ├── probar_llave.py          Sus pruebas, 19 casos
 │   ├── probar_flujo.py          El flujo completo contra el modelo de referencia
 │   ├── probar_descifrado.py     El descifrado del hardware contra el modelo
+│   ├── huella.py                SHA-256 del criptograma
 │   ├── novac_image.py           Ejecutable NOVA a imágenes de memoria
 │   ├── listado_a_texto.py       El texto de cada bundle, para la traza de make correr
+│   ├── barrido_jerarquia.sh     Barrido de la jerarquía (make analisis)
+│   ├── tabla_analisis.py        Sus tablas y gráficos
+│   ├── tabla_metricas.py        Tabla de make metricas
+│   ├── barrido_cache.sh         Barrido de capacidad de L1 de la Iteración 3
+│   ├── tabla_barrido.py         Su tabla
 │   └── programas/
 │       ├── feistel.s            Cifrado de un bloque con sesión de bóveda
 │       ├── cifrar_archivo.s     Cifra un archivo completo, bloque por bloque
@@ -520,16 +674,24 @@ VLIW-encryption-ISA/
 │       ├── fibonacci.s          F(0) a F(46), aritmética encadenada
 │       ├── estadisticas.s       Suma, máximo, mínimo y promedio con __div32
 │       ├── sesion_sin_logout.s  El cierre automático de sesión, visto por el programa
+│       ├── contar_hasta_n.s     Un lazo que solo escribe
 │       ├── lazo_estres.s        100 000 vueltas con los cinco slots ocupados
 │       ├── div32.s              Subrutina de división sin signo
 │       ├── div32_prueba.s       Seis pares para probarla
 │       ├── suma_10_15.s         El programa de la validación con CE1108
-│       └── cobertura.s          Usa el 100% del conjunto de instrucciones
+│       ├── suma_simple.s        Un cálculo escrito una operación por bundle
+│       ├── suma_vliw.s          El mismo, desenrollado
+│       ├── cobertura.s          Usa el 100% del conjunto de instrucciones
+│       ├── recorrido_cache.s    Escrito para saturar el write buffer
+│       ├── patron_secuencial.s  Recorrido secuencial: localidad espacial perfecta
+│       ├── patron_stride.s      Paso de una línea: localidad espacial nula
+│       ├── patron_aleatorio.s   Direcciones pseudoaleatorias
+│       └── patron_reuso.s       Dos pasadas sobre 8 KB: cabe en L2 y no en L1
 └── src/
     ├── build/
     │   └── makefile             Punto de entrada de simulación y lint
     ├── cpu/
-    │   ├── cerbero_defs.svh     Opcodes, campos, condiciones, causas y puertos
+    │   ├── cerbero_defs.svh     ISA, geometría y latencias de la jerarquía
     │   ├── regfile.sv           Banco de registros
     │   ├── alu.sv               S0 y S1
     │   ├── lsu.sv               S2
@@ -538,7 +700,7 @@ VLIW-encryption-ISA/
     │   ├── short_alu.sv         S3, ALU corta
     │   ├── bru.sv               S4
     │   ├── imem.sv              Memoria de instrucciones
-    │   ├── dmem.sv              Memoria de datos
+    │   ├── dmem.sv              Memoria de datos del Proyecto I (referencia)
     │   ├── dispatch.sv          Etapa ID
     │   ├── psw_fault_unit.sv    PSW y unidad de fallas
     │   ├── fetch.sv             Etapa IF, contador de programa
@@ -546,6 +708,15 @@ VLIW-encryption-ISA/
     │   ├── reg_id_ex.sv         Frontera ID/EX
     │   ├── reg_ex_mem.sv        Frontera EX/MEM
     │   ├── load_align.sv        Extracción del carril, usada en MEM
+    │   ├── l1_dcache.sv         Caché L1-D
+    │   ├── l2_arbiter.sv        Árbitro entre la L1 y el write buffer
+    │   ├── l2_cache.sv          Caché L2 unificada
+    │   ├── eviction_buffer.sv   Write buffer y eviction buffer
+    │   ├── mem_system.sv        Envoltorio de la memoria principal
+    │   ├── mem_controller.sv    FSM del acceso a memoria
+    │   ├── mem_clock_gen.sv     Divisor de reloj de la memoria
+    │   ├── main_memory.sv       64 KB, escritura por byte
+    │   ├── perf_counters.sv     Contadores de rendimiento
     │   └── top.sv               El procesador completo
     └── tb/
         ├── key_vault_model.sv   Modelo de bóveda para probar crypto_unit sola
@@ -556,6 +727,7 @@ VLIW-encryption-ISA/
         ├── tb_pipeline.sv       Latencia expuesta sobre la cadena de registros
         ├── tb_fetch_flow.sv     Búsqueda, delay slot y HALT con la BRU real
         ├── tb_top.sv            Siete programas sobre el procesador completo
+        ├── tb_patrones.sv       Patrones de acceso contra oráculos exactos
         ├── tb_asm.sv            El binario del ensamblador sobre el RTL
         ├── tb_div.sv            La subrutina de división sobre el RTL
         ├── tb_archivo.sv        Cifrado y descifrado de un archivo completo
@@ -564,7 +736,9 @@ VLIW-encryption-ISA/
         ├── tb_descifrado.sv     Descifra un .bin de disco (manual)
         ├── tb_ejemplos.sv       Los programas de demostración, comprobados
         ├── tb_sum.sv            El programa de la validación con CE1108
-        ├── tb_programa.sv       Ejecutor con traza del pipeline (no verifica)
+        ├── tb_vliw.sv           El mismo cálculo con y sin paralelismo
+        ├── tb_logout.sv         La bóveda sin LOGOUT
+        ├── tb_programa.sv       Ejecutor de make correr: traza e informe de métricas
         ├── imem_init.hex        Programa de ejemplo para tb_imem
         └── dmem_init.hex        Datos de ejemplo para tb_dmem
 ```
@@ -573,7 +747,9 @@ VLIW-encryption-ISA/
 
 Única fuente de verdad para los números del ISA: anchos, posiciones de campo,
 opcodes de los cinco slots, códigos de condición, bits del PSW y causas de
-falla. Lo incluyen los diecisiete módulos y los testbenches, de modo que renumerar un
+falla, y desde el Proyecto II también la geometría y las latencias de la
+jerarquía, con guardas `ifndef` para que un barrido las sobreescriba con `-D`.
+Lo incluyen todos los módulos y los testbenches, de modo que renumerar un
 opcode se hace en una línea y el RTL y las pruebas quedan sincronizados. Si
 estuviera escrito a mano en cada archivo, un testbench podría quedar probando
 una codificación que el módulo ya no implementa, y ambos "pasarían".
