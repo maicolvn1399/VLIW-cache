@@ -1,0 +1,40 @@
+# estres_conflicto.nv -- el peor caso para la jerarquia: conflictos en L1 Y L2
+#
+# Ocho lineas separadas exactamente 4 KB (1024 enteros):
+#   - en L1-D (64 conjuntos, indice addr[10:5]) caen en el MISMO conjunto,
+#     que solo tiene 2 vias
+#   - en L2 (128 conjuntos, indice addr[11:5]) tambien caen en el MISMO
+#     conjunto, que solo tiene 4 vias
+#
+# Recorridas en rotacion con LRU, ninguna sobrevive en ningun nivel: cada
+# acceso al arreglo falla en L1, falla en L2 y paga 8 + T_mem = 61 ciclos.
+# El conjunto de trabajo son solo 8 lineas (256 bytes): no es un problema de
+# capacidad sino de asociatividad.
+#
+# Los ocho accesos van en una sola expresion para que pesen mas que los
+# accesos a la pila que agrega el compilador (contador del lazo, temporales).
+#
+# Cabe en el limite de 200 000 ciclos del boton "Ejecutar RTL" del IDE.
+# Resultado esperado: 49920 (24 rondas x la suma de 1..64).
+
+functio principale() -> integer {
+    varia datos : integer[8192];
+    varia suma : integer = 0;
+
+    # Solo se escriben las 64 palabras que se van a leer: 8 lineas x 8 enteros
+    per (varia k : integer = 0; k < 8; k += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            datos[k * 1024 + i] = k * 8 + i + 1;
+        }
+    }
+
+    per (varia r : integer = 0; r < 24; r += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            suma += datos[i]        + datos[i + 1024] + datos[i + 2048] +
+                    datos[i + 3072] + datos[i + 4096] + datos[i + 5120] +
+                    datos[i + 6144] + datos[i + 7168];
+        }
+    }
+
+    redde suma;
+}

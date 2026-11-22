@@ -1,0 +1,102 @@
+=== resultado de patron_reuso.s ===
+
+  el programa llego a HALT en 22301 ciclos, 4125 bundles ejecutados
+
+  metricas de rendimiento (contadores de hardware)
+    ciclos de ejecucion               22301
+    bundles ejecutados                 4125
+    instrucciones ejecutadas           3087
+    IPC  (instrucciones/ciclo)        0.138
+    bundles por ciclo                 0.185
+    ocupacion del bundle               0.75  de 5 ranuras
+    bundles vacios (puros NOP)         2577
+    saltos tomados                      511
+    delay slots desperdiciados          511
+    ciclos perdidos por stalls        18176
+
+  cache L1-D (4096 B, 2 vias, 64 conjuntos, lineas de 32 B,
+              write-through, no-write-allocate, LRU)
+    accesos totales                     513
+      lecturas: aciertos                  0
+      lecturas: fallos                  512
+      escrituras: aciertos                0
+      escrituras: fallos                  1
+    tasa de aciertos                  0.00%
+    tasa de fallos                  100.00%
+    penalidad medida por fallo         35.5 ciclos  (T_mem = 53)
+    AMAT                              36.50 ciclos
+
+    ciclos perdidos, por causa
+      fallo de lectura                18176
+        que acerto en L2               2048
+        que fallo en L2               16128
+      write buffer lleno                  0
+      conflicto RAW                       0
+      eviction buffer lleno               0
+      total                           18176
+
+  cache L2 unificada (16 KB, 4 vias, 128 conjuntos, write-back,
+                      write-allocate, LRU exacto, hit time 8)
+    accesos totales                     513
+      lecturas: aciertos                256
+      lecturas: fallos                  256
+      escrituras: aciertos                0
+      escrituras: fallos                  1
+    tasa de aciertos                 49.90%
+    tasa de fallos local             50.10%
+    invalidaciones hacia atras            0  (ejecutadas sobre L1-D)
+
+  memoria principal
+    accesos (lineas completas)          258
+    ciclos en transferencias          13416
+    ciclos por acceso                  52.0  (T_mem = 53)
+    utilizacion del bus              59.48%  (del reset al drenado completo)
+      ventana medida                  22557 ciclos  (22301 del programa + 256 de drenado)
+
+  AMAT de lectura con dos niveles
+    m_L1 (lecturas)                 100.00%
+    m_L2 local (lecturas)            50.00%
+    teorico                           36.50 ciclos  (T_L1=1, T_L2=8, T_mem=53+2)
+    medido                            36.50 ciclos
+    penalidad medida, acierto L2        8.0 ciclos  (minimo 8)
+    penalidad medida, fallo L2         63.0 ciclos  (minimo 63)
+    ok     suma de causas = stalls 18176
+    ok     stall_l2_hit + stall_l2_miss = stall_por_miss 18176
+    ok     accesos L1 = loads + stores 513
+
+    ocupacion por ranura
+      S0 ALU-0       1030
+      S1 ALU-1        515
+      S2 LSU          513   (512 loads, 1 stores)
+      S3 cripto       514
+      S4 BRU          515
+
+  los contadores contra la cuenta del testbench
+    ok     ciclos                 22301
+    ok     bundles                4125
+    ok     instrucciones          3087
+    ok     ranura S0              1030
+    ok     ranura S1              515
+    ok     ranura S2              513
+    ok     ranura S3              514
+    ok     ranura S4              515
+    ok     loads                  512
+    ok     stores                 1
+    ok     loads + stores = S2    513
+
+  registros
+    r0  = 00000000            0        r1  = 00004000        16384
+    r2  = 00000000            0        r3  = 00000100          256
+    r4  = 00000000            0        r5  = 00000002            2
+    r6  = 00000100          256        r7  = 00000000            0
+    r8  = 00000000            0        r9  = 00000000            0
+    r10 = 00000000            0        r11 = 00000000            0
+    r12 = 00000000            0        r13 = 00000000            0
+    r14 = 00000000            0        r15 = 00000000            0
+
+  PSW = 00000001
+    banderas  Z=1 N=0 C=0 V=0
+    boveda    AUTH=0 AUTHFAIL=0
+    fallas    EXC=0 CAUSE=ninguna
+
+  memoria escrita por el programa: ninguna palabra cambio

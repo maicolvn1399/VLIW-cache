@@ -1,0 +1,48 @@
+# estres_escritura.nv -- conflictos con ESCRITURAS: el peor caso de verdad
+#
+# Igual que estres_conflicto.nv, ocho lineas separadas 4 KB caen en el mismo
+# conjunto de L1-D (2 vias) y de L2 (4 vias). La diferencia es que aqui cada
+# acceso es leer-modificar-escribir: datos[x] = datos[x] + r.
+#
+# Eso ataca lo que estres_conflicto no toca:
+#   - la L2 es write-back con write-allocate: cada store deja la linea SUCIA,
+#     y como ninguna linea sobrevive en el conjunto, cada expulsion de la L2
+#     tiene que escribirse a memoria por el eviction buffer
+#   - la L1 es write-through: cada store pasa por el write buffer
+#   - el load de la siguiente iteracion cae en la misma linea que el store
+#     anterior, que puede seguir en el write buffer: riesgo RAW (stall)
+#
+# Cada fallo puede costar dos viajes a memoria: traer la linea y devolver la
+# sucia que se expulsa.
+#
+# Resultado esperado: 19744 = (1 + 2 + ... + 64) + 64 x (0 + 1 + ... + 23)
+
+functio principale() -> integer {
+    varia datos : integer[8192];
+    varia suma : integer = 0;
+
+    per (varia k : integer = 0; k < 8; k += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            datos[k * 1024 + i] = k * 8 + i + 1;
+        }
+    }
+
+    per (varia r : integer = 0; r < 24; r += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            # las ocho lineas en rotacion; un lazo en vez de ocho sentencias
+            # porque con -O0 el cuerpo desenrollado excede el alcance del
+            # salto (512 bundles)
+            per (varia k : integer = 0; k < 8; k += 1) {
+                datos[k * 1024 + i] = datos[k * 1024 + i] + r;
+            }
+        }
+    }
+
+    per (varia k : integer = 0; k < 8; k += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            suma += datos[k * 1024 + i];
+        }
+    }
+
+    redde suma;
+}

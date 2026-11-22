@@ -488,12 +488,43 @@
 `define L1_HIT_CYCLES 1
 `define L2_HIT_CYCLES 8
 
+// Ciclos que un fallo de L2 paga ademas de L2_HIT_CYCLES y T_MEM. En un
+// acierto, EVALUAR es el ciclo en que la L2 levanta listo; en un fallo ese
+// ciclo ya es de espera, y despues de que llega la linea hay uno mas
+// (ACTUALIZAR) en que la L2 la escribe antes de entregarla (l2_cache.sv).
+//
+// Medido fallo por fallo: un fallo de L1 que acierta en L2 sin esperar al
+// write buffer cuesta exactamente L2_HIT_CYCLES = 8 ciclos de stall, y uno
+// que falla en L2, 8 + 53 + 2 = 63. Solo la usa el informe, para el AMAT
+// teorico de dos niveles.
+`define L2_MISS_EXTRA 2
+
+// Lo mismo para la linea base sin L2 (CERBERO_SIN_L2): ciclos que un fallo de
+// L1 paga ademas de T_MEM cuando el arbitro va directo a memoria principal.
+// Medido en patron_stride sin L2: los 1024 fallos cuestan 54 ciclos cada uno.
+`define MEM_DIRECTO_EXTRA 1
+
 // Geometria de la L2, la que fija el enunciado: 16 KB, 4 vias, lineas de 32 B.
 //   L2_SETS = L2_BYTES / LINE_BYTES / L2_WAYS = 16384 / 32 / 4 = 128
 // top.sv las pasa como parametros a l2_cache y tb_programa.sv las usa para
 // rotular el informe, asi que la geometria se dice en un solo lugar.
-`define L2_BYTES  16384
-`define L2_WAYS       4
-`define L2_SETS     128
+//
+// Van con guarda, igual que las de L1, para que un barrido las cambie con -D.
+// Hay que dar las tres coherentes: top.sv aborta si L2_BYTES no es
+// L2_SETS x L2_WAYS x LINE_BYTES, y l2_cache.sv si las vias o los conjuntos
+// no son potencia de dos.
+`ifndef L2_BYTES
+  `define L2_BYTES  16384
+`endif
+`ifndef L2_WAYS
+  `define L2_WAYS       4
+`endif
+`ifndef L2_SETS
+  `define L2_SETS     128
+`endif
+
+// CERBERO_SIN_L2 (sin valor, por -D) saca la L2 de la jerarquia: el arbitro
+// habla directo con la memoria principal. Es la linea base del analisis de la
+// Iteracion 5, la que mide cuanto aporta la L2, sobre el mismo RTL.
 
 `endif // CERBERO_DEFS_SVH
