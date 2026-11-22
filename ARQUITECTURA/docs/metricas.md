@@ -13,6 +13,13 @@ produce ese número: el rendimiento de CERBERO-1 con una memoria de datos que
 responde siempre en un ciclo, que es exactamente la suposición que la
 Iteración 2 va a eliminar.
 
+> Estado actual. Este documento se conserva como el registro de la Iteración 1,
+> y por eso habla de la caché en futuro. Desde entonces `perf_counters.sv` pasó
+> de los 12 contadores de la sección 2 a 31, con los de L1-D, L2, inclusión y
+> memoria principal (sección 2), y su testbench de 54 a 95 casos. La lista
+> completa está en [organizacion.md](organizacion.md) y su uso en
+> [analisis-rendimiento.md](analisis-rendimiento.md).
+
 ---
 
 ## 1. Qué se agregó y qué no se tocó
@@ -55,7 +62,7 @@ aprovechamiento de los bundles.
 | Bundles vacíos | Bundles cuyos cinco slots traían NOP | contador |
 | Saltos tomados | Saltos que la BRU resolvió como tomados | contador |
 | Delay slots desperdiciados | Delay slots que no traían ninguna operación | contador |
-| Ciclos perdidos por stalls | Ciclos con el pipeline congelado | contador (hoy siempre 0) |
+| Ciclos perdidos por stalls | Ciclos con el pipeline congelado | contador (siempre 0 en la Iteración 1; desde la 3, los stalls de caché) |
 | IPC | Instrucciones ÷ ciclos | derivada |
 | Bundles por ciclo | Bundles ÷ ciclos | derivada |
 | Ocupación del bundle | Instrucciones ÷ bundles, de 5 ranuras | derivada |
@@ -64,10 +71,25 @@ Las tres derivadas se calculan en el informe y no en hardware: un divisor
 cuesta área y latencia para producir un número que una resta en el testbench da
 igual de bien.
 
-Las métricas de caché (hit/miss de L1-D y L2) y de memoria principal
-(accesos, ciclos de transferencia, ancho de banda) no existen todavía porque no
-existen todavía esos componentes. Entran con sus iteraciones: la 2 agrega las
-de memoria principal y la 3 y la 4 las de cada nivel de caché.
+En la Iteración 1 no había métricas de caché ni de memoria principal porque
+esos componentes no existían. Entraron con sus iteraciones, en la misma unidad
+y con la misma estructura saturante:
+
+| Métrica | Contadores | Desde |
+| :--- | :--- | :--- |
+| Accesos a memoria de datos, loads y stores | `accesos_load`, `accesos_store` | Iteración 2 |
+| Accesos, hits y misses de L1-D, por lectura y escritura | `l1_load_hit`, `l1_load_miss`, `l1_store_hit`, `l1_store_miss` | Iteración 3 |
+| Stalls por causa | `stall_por_miss`, `stall_por_wb`, `stall_por_raw` | Iteración 3 |
+| Accesos, hits y misses de L2, por lectura y escritura | `l2_load_hit`, `l2_load_miss`, `l2_store_hit`, `l2_store_miss` | Iteración 4 |
+| Stall por eviction buffer lleno | `stall_por_evict` | Iteración 4 |
+| Invalidaciones hacia atrás sobre L1-D (§5.2 del enunciado) | `inv_ejecutadas` | Iteración 5 |
+| Accesos a memoria principal y ciclos en transferencias (§5.3) | `mem_accesos`, `mem_ciclos` | Iteración 5 |
+| Stalls por fallo de L1, según si la L2 acertó o falló | `stall_l2_hit`, `stall_l2_miss` | Iteración 5 |
+
+Igual que el IPC, lo que es un cociente se calcula en el informe y no en
+hardware: las tasas de acierto y de fallo de cada nivel, el AMAT de L1-D, el AMAT
+de lectura de dos niveles (teórico contra medido) y la utilización del bus, que
+es `mem_ciclos` sobre los ciclos del reset al drenado completo.
 
 ---
 
@@ -286,18 +308,3 @@ make correr PROG=fibonacci.s
 `make ocupacion` y `make metricas` responden a la misma pregunta desde dos
 lados: el primero lee el fuente y dice lo que el programa **trae**; el segundo
 corre el procesador y dice lo que **hizo**.
-
----
-
-## 7. Lo que sigue
-
-| Iteración | Qué agrega | Qué métricas habilita |
-| :---: | :--- | :--- |
-| 2 | Modelo realista de memoria principal con `T_mem` y eviction buffer | Accesos a memoria, ciclos en transferencias, ancho de banda |
-| 3 | Caché L1-D y los stalls del pipeline | Hit/miss de L1-D, ciclos perdidos por miss |
-| 4 | Caché L2 y la política de inclusión | Hit/miss de L2, tráfico entre niveles, AMAT |
-| 5 | Benchmarks bajo distintos niveles de optimización | La comparación completa contra esta línea base |
-
-El único cambio que la Iteración 3 tiene que hacer en los contadores es
-conectar `cache_stall` a la entrada `stall` de `perf_counters` en `top.sv`
-(decisión D2).
