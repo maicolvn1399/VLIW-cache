@@ -1,0 +1,43 @@
+# estres_buffers.nv -- llena el write buffer y el eviction buffer
+#
+# Solo escrituras, con stride de una linea (8 enteros = 32 B) sobre 32 KB:
+#
+#   - la L1-D es no-write-allocate y write-through: ningun store se queda en
+#     L1, todos van al write buffer, y como cada uno cae en una linea distinta
+#     la fusion no ayuda (una entrada por store)
+#   - la L2 es write-allocate: cada store que le llega y falla tiene que traer
+#     la linea de memoria (53 ciclos) antes de escribirla, asi que el write
+#     buffer se vacia mucho mas lento de lo que el procesador lo llena
+#   - 32 KB no caben en la L2 (16 KB): desde la mitad de la primera pasada,
+#     cada linea que se instala expulsa una linea SUCIA, que sale por el
+#     eviction buffer y compite por el bus con las lecturas de la L2
+#
+# Ocho stores por iteracion para que pesen mas que el contador del lazo.
+# Al final se lee una palabra por linea para verificar el resultado.
+#
+# Resultado esperado: 4193280 = 8 x (0 + 1 + ... + 1023) + 3 x 1024
+
+functio principale() -> integer {
+    varia datos : integer[8192];
+    varia suma : integer = 0;
+
+    # Cuatro pasadas: cada una reescribe las 1024 lineas
+    per (varia p : integer = 0; p < 4; p += 1) {
+        per (varia i : integer = 0; i < 8192; i += 64) {
+            datos[i]      = i + p;
+            datos[i + 8]  = i + 8 + p;
+            datos[i + 16] = i + 16 + p;
+            datos[i + 24] = i + 24 + p;
+            datos[i + 32] = i + 32 + p;
+            datos[i + 40] = i + 40 + p;
+            datos[i + 48] = i + 48 + p;
+            datos[i + 56] = i + 56 + p;
+        }
+    }
+
+    per (varia i : integer = 0; i < 8192; i += 8) {
+        suma += datos[i];
+    }
+
+    redde suma;
+}

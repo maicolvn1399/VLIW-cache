@@ -1,0 +1,53 @@
+# estres_cache_ide.nv -- version reducida de estres_cache.nv para el IDE
+#
+# El boton "Ejecutar RTL" del IDE corta a los 200 000 ciclos, y la version
+# completa necesita unos 2 millones. Esta conserva las fases pero con un
+# arreglo de 8 KB: el doble de la L1-D (4 KB) y la mitad de la L2 (16 KB).
+# Asi casi todos los fallos de L1 los atrapa la L2 (8 ciclos en vez de 61).
+#
+#   fase 1  llenado con stride de una linea (stores al write buffer)
+#   fase 2  recorrido con stride de una linea, dos pasadas
+#           (8 KB no caben en L1: cada acceso falla en L1 y acierta en L2)
+#   fase 3  conflictos: 3 lineas a 2 KB en el mismo conjunto de L1 (2 vias)
+#   fase 4  suma secuencial de 2 KB, que si cabe en L1 (7 de cada 8 aciertan)
+
+functio principale() -> integer {
+    varia datos : integer[2048];
+    varia total : integer = 0;
+    varia parcial : integer = 0;
+
+    # Fase 1: una escritura por linea
+    per (varia i : integer = 0; i < 2048; i += 8) {
+        datos[i] = i;
+    }
+
+    # Fase 2: stride de 8 enteros, dos pasadas
+    parcial = 0;
+    per (varia p : integer = 0; p < 2; p += 1) {
+        per (varia i : integer = 0; i < 2048; i += 8) {
+            parcial += datos[i];
+        }
+    }
+    scribe(parcial);
+    total += parcial;
+
+    # Fase 3: conflictos en un conjunto de L1
+    parcial = 0;
+    per (varia r : integer = 0; r < 40; r += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            parcial += datos[i * 8] + datos[i * 8 + 512] + datos[i * 8 + 1024];
+        }
+    }
+    scribe(parcial);
+    total += parcial;
+
+    # Fase 4: secuencial sobre 2 KB
+    parcial = 0;
+    per (varia i : integer = 0; i < 512; i += 1) {
+        parcial += datos[i];
+    }
+    scribe(parcial);
+    total += parcial;
+
+    redde total;
+}

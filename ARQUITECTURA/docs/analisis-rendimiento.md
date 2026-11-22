@@ -397,6 +397,92 @@ La segunda mitad de §7.1.5, correr los benchmarks con distintos niveles de opti
 
 **4. Las dos mediciones se complementan.** Ese corpus ejerce poco la caché (AMAT de 1,05, stalls en el 1,7 % de los ciclos): mide bien al compilador y mal a la jerarquía. Los patrones de §11 son lo opuesto, con AMAT de hasta 64 ciclos. Por eso las conclusiones sobre la jerarquía de este documento se apoyan en los patrones y el barrido, y las conclusiones sobre el compilador en el corpus de NOVA.
 
+### 12.1 Programas de NOVA escritos para estresar la jerarquía
+
+El punto 4 deja un hueco: los patrones de §11 estresan la jerarquía pero están escritos a mano en ensamblador, y el corpus de NOVA pasa por el compilador pero casi no toca la caché. Para cerrarlo se escribieron cinco programas en NOVA, compilados por `novac`, cuyo patrón de acceso está calculado sobre la geometría de CERBERO para atacar un mecanismo concreto de la jerarquía. Cada uno se corrió con `-O0`, `-O1` y `-O2`, con L2 y sin L2 (`CERBERO_SIN_L2`, la misma línea base de §8): 30 corridas, todas con el resultado esperado en R6.
+
+#### Cómo se elige el patrón
+
+Tres reglas salen directamente de la geometría:
+
+- Dos direcciones caen en el mismo conjunto si difieren en un múltiplo de conjuntos × línea: 64 × 32 B = 2 KB en L1 (512 enteros) y 128 × 32 B = 4 KB en L2 (1024 enteros). Con 4 KB de separación chocan en los dos niveles a la vez.
+- Un paso igual a la línea (8 enteros) anula la localidad espacial: cada acceso estrena línea.
+- Un conjunto de trabajo mayor que un nivel garantiza fallos de capacidad en ese nivel.
+
+Y dos reglas salen del compilador: varios accesos al arreglo por iteración, para que pesen más que los accesos al contador del lazo, y nada de `/`, `%` ni `scribe` dentro del lazo medido, porque la división es una rutina de software que agrega accesos ajenos al patrón. Los arreglos son locales y viven en el marco de pila (de 0x7FF0 a 0xFFFC en el más grande); el compilador avisa con W007 que el marco excede los 4 KB nominales de la pila, pero no se superpone con las zonas fijas de datos (0x2000 a 0x3004).
+
+#### Los cinco programas
+
+| Programa | Qué hace | Por qué estresa la jerarquía | R6 esperado |
+|---|---|---|---|
+| `estres_cache.nv` | Arreglo de 24 KB en cinco fases: llenado, suma secuencial ×2, stride de una línea ×2, conflicto de 3 líneas a 2 KB, y 2048 lecturas aleatorias (xorshift) sobre los primeros 16 KB | 24 KB no caben ni en L1 ni en L2: fallos de capacidad en los dos niveles. El conflicto (3 líneas) no cabe en las 2 vías de L1 pero sí en las 4 de L2, y el aleatorio recorre justo la capacidad de L2 | 47 763 932 |
+| `estres_cache_ide.nv` | Versión de 8 KB que cabe en el límite de 200 000 ciclos del IDE: llenado con stride, stride ×2, conflicto ×40 y suma secuencial de 2 KB | 8 KB es el doble de L1 y la mitad de L2: casi todo fallo de L1 lo atrapa la L2. Es el caso favorable a la L2 | 1 056 768 |
+| `estres_conflicto.nv` | Ocho líneas separadas 4 KB, leídas en rotación 24 veces | Las ocho caen en el mismo conjunto de L1 (2 vías) y de L2 (4 vías). Con LRU ninguna sobrevive en ningún nivel: cada lectura del arreglo falla en los dos. El conjunto de trabajo son 256 bytes; el problema es de asociatividad, no de capacidad | 49 920 |
+| `estres_escritura.nv` | Las mismas ocho líneas, pero cada acceso es leer-modificar-escribir (`datos[x] = datos[x] + r`) | Agrega el camino de escritura: cada store pasa por el write buffer (L1 write-through), deja sucia la línea en L2 (write-back), y el load siguiente cae en la línea que el store anterior todavía tiene en el buffer (riesgo RAW) | 19 744 |
+| `estres_buffers.nv` | Solo stores, uno por línea (paso de 8 enteros), sobre 32 KB, cuatro pasadas, con ocho stores por iteración | Ningún store se queda en L1 (no-write-allocate) y la fusión no ayuda porque cada uno cae en una línea distinta. La L2 write-allocate tiene que traer cada línea de memoria antes de escribirla, así que el write buffer se vacía mucho más lento de lo que se llena. 32 KB no caben en L2: cada línea instalada expulsa una sucia | 4 193 280 |
+
+#### Resultados con `-O2`
+
+| | `cache` | `cache_ide` | `conflicto` | `escritura` | `buffers` |
+|---|---|---|---|---|---|
+| Ciclos con L2 | 1 472 131 | 117 741 | 142 677 | 226 739 | 531 139 |
+| Ciclos sin L2 | 1 761 072 | 216 614 | 134 244 | 235 604 | 391 009 |
+| Aceleración por la L2 | 1,20× | 1,84× | 0,94× | 1,04× | 0,74× |
+| Aciertos L1 | 92,44 % | 86,45 % | 66,89 % | 89,87 % | 80,42 % |
+| Aciertos de lectura en L2 | 49,06 % | 99,93 % | 0,07 % | 0,07 % | 0,10 % |
+| AMAT de lectura, con / sin L2 | 2,99 / 5,33 | 2,25 / 12,64 | 24,01 / 22,04 | 9,13 / 9,87 | 4,36 / 5,61 |
+| Stall por write buffer lleno, con L2 | 0 | 5338 | 0 | 0 | 296 364 |
+| Stall por RAW, con L2 | 120 | 120 | 69 | 69 | 69 |
+| Invalidaciones hacia atrás | 0 | 0 | 24 | 0 | 0 |
+| Accesos a memoria, con / sin L2 | 5028 / 31 749 | 516 / 3748 | 1592 / 1998 | 3071 / 4353 | 9209 / 7157 |
+| Utilización del bus, con / sin L2 | 17,8 % / 93,7 % | 20,4 % / 90,0 % | 57,8 % / 77,4 % | 70,3 % / 96,1 % | 90,1 % / 95,2 % |
+
+La aceleración es ciclos sin L2 entre ciclos con L2: mayor que 1 significa que la L2 ayuda.
+
+#### Aceleración por la L2 según el nivel de optimización
+
+| Programa | `-O0` | `-O1` | `-O2` |
+|---|---|---|---|
+| `estres_cache_ide` | 1,72× | 1,66× | 1,84× |
+| `estres_escritura` | 1,67× | 1,76× | 1,04× |
+| `estres_conflicto` | 1,41× | 1,41× | 0,94× |
+| `estres_cache` | 1,19× | 1,19× | 1,20× |
+| `estres_buffers` | 0,83× | 0,83× | 0,74× |
+
+#### Qué dicen estos números
+
+1. La L2 gana cuando hay reuso que le cabe. En `estres_cache_ide` la L2 atrapa el 99,93 % de las lecturas que fallan en L1 y el programa corre 1,84× más rápido; en `estres_cache`, que no cabe entero, atrapa la mitad y gana 1,20×. Es la condición de §8 (atrapar más del 16,4 % de los fallos de L1), ahora con código generado por el compilador.
+
+2. Sin reuso, la L2 cuesta. En `estres_conflicto` con `-O2` la L2 acierta 1 lectura de 1537 y el programa es un 6 % más lento con ella: cada fallo paga los 8 ciclos de consultarla antes de ir a memoria (penalidad mínima de 63 ciclos contra 54 sin L2; medidas, 63,8 y 59,2). El número de fallos coincide con el oráculo: 24 rondas × 8 posiciones × 8 lecturas = 1536 fallos de lectura en L2, y se midieron 1536.
+
+3. El compilador decide si la L2 ayuda. El mismo `estres_conflicto` gana 1,41× con la L2 en `-O0` y pierde un 6 % en `-O2`. En `-O0` cada temporal baja al marco de pila, así que el programa hace miles de stores que la L1 write-through manda abajo; la L2 write-back los absorbe (bus al 40,8 %) y sin ella llegan todos a memoria (bus al 97,9 %). La asignación de registros de `-O2` elimina ese tráfico y deja expuesto el patrón real, que no tiene reuso. Es la interacción entre decisiones arquitecturales y código generado que pide §7.1.5.
+
+4. Write-through en L1 depende de la L2 write-back. Sin L2 el bus supera el 95 % de utilización en los cinco programas con `-O0`, y la L2 reduce los accesos a memoria de 31 749 a 5028 en `estres_cache` (6,3 veces menos). La justificación de D1 en [jerarquia-memoria.md](jerarquia-memoria.md) supone esa L2 debajo; sin ella, write-through satura la memoria.
+
+5. Write-allocate en L2 tiene un caso malo medible. `estres_buffers` es 1,36× más lento con L2 en `-O2`: cada store de 4 bytes que falla en L2 trae primero la línea de 32 B de memoria y, cuando esa línea sucia se expulsa, la devuelve. Son dos transferencias de línea por store, contra una escritura con máscara sin L2. El write buffer, que se vacía a velocidad de memoria, pierde 296 364 ciclos lleno, el 56 % de la ejecución. Ningún otro programa del proyecto se le acerca: los siguientes son `recorrido_cache.s` con 6665 ciclos y `estres_cache_ide` con 5338. El bypass de línea completa de la L2 no se activa porque cada store toca una palabra de una línea distinta; un patrón que escribiera líneas enteras no pagaría la lectura. Para la pendiente P3 de [decisiones.md](decisiones.md), write-allocate gana con leer-modificar-escribir (`estres_escritura`, 1,67× en `-O0`) y pierde con escrituras dispersas.
+
+6. El eviction buffer nunca se llena con L2. Cero ciclos lleno en las 15 corridas con L2, incluida `estres_buffers`, que expulsa líneas sucias de forma continua. La razón es estructural: cada expulsión va acompañada de una lectura de 53 ciclos para instalar la línea nueva, así que el buffer recibe como mucho una entrada cada 53 ciclos y en ese tiempo vacía una. Sin L2 el que se llena es el buffer hacia memoria (238 629 ciclos en `estres_buffers -O2`), porque ahí descarga directamente el write buffer. Es evidencia a favor de que 8 entradas sobran (limitación 5 de §14).
+
+7. El costo de la inclusión, con la geometría real. `estres_conflicto` con `-O2` produce 24 invalidaciones hacia atrás, y sin L2 la L1 tiene exactamente 24 aciertos de lectura más (2746 contra 2722). Cada línea que la L2 obligó a soltar era una que la L1 iba a reutilizar. §10 solo había medido este costo con una L2 reducida a 4 KB; aquí aparece con la de 16 KB. En `-O0` hay cero invalidaciones: el tráfico de pila expulsa esas líneas de la L1 antes de que la L2 las invalide.
+
+8. El riesgo RAW sí aparece en código con stores. `estres_escritura` pierde 7749 ciclos por RAW en `-O0` y `-O1`, contra los cero del barrido de §13: el load de la siguiente iteración cae en la línea que el store anterior todavía tiene en el write buffer. Con `-O2` bajan a 69, porque el compilador separa los accesos. El stall sigue siendo barato frente a los fallos (7749 de 113 292 ciclos de stall, el 6,8 %), lo que mantiene la decisión D4.
+
+9. `-O1` no cambia la jerarquía. En `estres_escritura`, `-O0` y `-O1` pierden exactamente los mismos ciclos por stall con L2 (113 292) y `-O1` es un 6 % más rápido solo por ejecutar menos instrucciones; en `estres_buffers` los ciclos son idénticos. `-O1` limpia cálculo pero deja los temporales en la pila, así que hace los mismos accesos en el mismo orden. El cambio de comportamiento de la jerarquía llega con la asignación de registros de `-O2`.
+
+10. La tasa de aciertos engaña cuando cambia el código. En `estres_conflicto` la L1 acierta el 89,75 % con `-O0` y el 66,89 % con `-O2`, y aun así `-O2` tarda un 23 % menos de ciclos. Los aciertos que pierde `-O2` eran accesos al marco de pila que dejaron de existir. Para comparar niveles de optimización hay que mirar ciclos y AMAT, no la tasa.
+
+#### Cómo reproducir
+
+Desde la raíz del repositorio, en Linux o WSL:
+
+```bash
+./correr_estres.sh                                  # los cinco programas, 3 niveles × con y sin L2
+./correr_estres.sh estres_conflicto                 # uno solo
+NIVELES="O2" ./correr_estres.sh estres_buffers      # un solo nivel
+```
+
+El script compila cada programa con `novac`, genera las imágenes con `novac_image.py`, recompila el RTL desde cero en cada corrida (el `.vvp` guarda la configuración, así que `make clean` es obligatorio entre una con L2 y otra sin ella) y deja el informe completo en `.salida/informes/<programa>-<nivel>-<con|sin>.txt`. El límite de ciclos sube a 8 000 000 porque `estres_cache` sin L2 con `-O0` tarda 2 341 892, más que los 2 000 000 por defecto de `make correr`. La batería completa tarda más de una hora; casi todo es `estres_cache`.
+
 ---
 
 ## 13. Justificación de las decisiones a partir de lo medido
@@ -423,10 +509,10 @@ El razonamiento de cada política está en [jerarquia-memoria.md](jerarquia-memo
 ## 14. Limitaciones del análisis
 
 1. **La asociatividad no se barrió.** `l1_dcache.sv` implementa exactamente dos vías, y el barrido de L2 deja las cuatro vías fijas para variar solo la capacidad. Comparar asociatividades en la L2 es posible con el RTL actual (es de N vías), pero no se hizo.
-2. **Los patrones son microbenchmarks, no carga real.** Sirven para separar configuraciones y validar contadores contra aritmética. La carga real es el corpus de NOVA (§12), que ejerce poco la jerarquía.
+2. **Los patrones son microbenchmarks, no carga real.** Sirven para separar configuraciones y validar contadores contra aritmética. La carga real es el corpus de NOVA (§12), que ejerce poco la jerarquía. Los programas de §12.1 están en NOVA y sí la ejercen, pero también se escribieron para un mecanismo concreto, así que son benchmarks dirigidos y no carga típica.
 3. **Los programas del Proyecto I son demasiado cortos para la jerarquía.** Con uno a ocho fallos de lectura cada uno, sus aceleraciones (0,89× a 1,01×) dependen de detalles del arbitraje y dicen poco de la L2.
 4. **El AMAT teórico no modela la contención con el write buffer.** Coincide con el medido salvo en `recorrido_cache` (3,00 contra 3,88), donde la diferencia está explicada (§9) pero no incluida en la fórmula.
-5. **El eviction buffer no se midió con menos de 8 entradas.** Que marque cero con 8 sugiere que 4 también alcanzaría, pero no está medido.
+5. **El eviction buffer no se midió con menos de 8 entradas.** Que marque cero con 8 sugiere que 4 también alcanzaría, pero no está medido. §12.1 refuerza la sospecha: tampoco se llena con `estres_buffers`, que expulsa líneas sucias de forma continua, y el argumento de por qué no puede llenarse con L2 es estructural.
 6. **`lazo_estres.s` no entra en el barrido** por su duración; su comportamiento (100 % de aciertos) es el mismo en cualquier geometría.
 7. **La frecuencia es un modelo, no una medición física.** Los 53 ciclos salen del modelo de 25 MHz con ráfaga de 8 palabras. No hay síntesis, así que el número es consistente dentro del proyecto pero no es una latencia de DRAM real.
 
@@ -446,4 +532,4 @@ make analisis              # el barrido completo (§7 a §11), unos 6 minutos
 make tablas-analisis       # solo las tablas y los gráficos, desde los informes guardados
 ```
 
-Los resultados quedan en `barrido/jerarquia/<configuración>/metricas_<programa>.txt`, las tablas en `barrido/jerarquia/tablas.md` y los gráficos en `docs/imgs/it5_*.png`. El análisis por nivel de optimización se reproduce desde la raíz del repositorio con `make medir-niveles` (ver [ITERACION5_NIVELES.md](../../documentacion/ITERACION5_NIVELES.md)).
+Los resultados quedan en `barrido/jerarquia/<configuración>/metricas_<programa>.txt`, las tablas en `barrido/jerarquia/tablas.md` y los gráficos en `docs/imgs/it5_*.png`. El análisis por nivel de optimización se reproduce desde la raíz del repositorio con `make medir-niveles` (ver [ITERACION5_NIVELES.md](../../documentacion/ITERACION5_NIVELES.md)). Los programas de NOVA que estresan la jerarquía (§12.1) se corren desde la raíz con `./correr_estres.sh`.

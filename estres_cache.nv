@@ -1,0 +1,70 @@
+# estres_cache.nv -- benchmark que estresa la jerarquia L1-D / L2
+#
+# Geometria que se ataca:
+#   L1-D  4 KB, 2 vias, 64 conjuntos, linea de 32 B (8 enteros)
+#   L2   16 KB, 4 vias, 128 conjuntos, linea de 32 B
+#
+# El arreglo ocupa 24 KB: no cabe ni en L1 ni en L2, asi que cada fase
+# obliga a ir a memoria principal (T_mem = 53 ciclos).
+#
+# Cada fase escribe su suma parcial con scribe para poder verificarla:
+#   fase 1  llenado secuencial      (stores, no-write-allocate)
+#   fase 2  suma secuencial x2      (capacidad: 7/8 aciertos en L1, L2 no alcanza)
+#   fase 3  stride de una linea     (sin localidad espacial: 0 % en L1)
+#   fase 4  conflictos              (3 lineas a 2 KB: mismo conjunto L1 de 2 vias)
+#   fase 5  accesos aleatorios      (xorshift, sin divisiones)
+
+functio principale() -> integer {
+    varia datos : integer[6144];
+    varia total : integer = 0;
+    varia parcial : integer = 0;
+
+    # Fase 1: llenado
+    per (varia i : integer = 0; i < 6144; i += 1) {
+        datos[i] = i;
+    }
+
+    # Fase 2: suma secuencial, dos pasadas sobre 24 KB
+    parcial = 0;
+    per (varia p : integer = 0; p < 2; p += 1) {
+        per (varia i : integer = 0; i < 6144; i += 1) {
+            parcial += datos[i];
+        }
+    }
+    scribe(parcial);
+    total += parcial;
+
+    # Fase 3: stride de 8 enteros (una linea por acceso), dos pasadas
+    parcial = 0;
+    per (varia p : integer = 0; p < 2; p += 1) {
+        per (varia i : integer = 0; i < 6144; i += 8) {
+            parcial += datos[i];
+        }
+    }
+    scribe(parcial);
+    total += parcial;
+
+    # Fase 4: tres lineas separadas 2 KB caen en el mismo conjunto de L1
+    parcial = 0;
+    per (varia r : integer = 0; r < 100; r += 1) {
+        per (varia i : integer = 0; i < 8; i += 1) {
+            parcial += datos[i] + datos[i + 512] + datos[i + 1024];
+        }
+    }
+    scribe(parcial);
+    total += parcial;
+
+    # Fase 5: aleatorio sobre los primeros 16 KB
+    parcial = 0;
+    varia x : integer = 0x12345678;
+    per (varia k : integer = 0; k < 2048; k += 1) {
+        x = x ^ (x << 13);
+        x = x ^ (x >>> 17);
+        x = x ^ (x << 5);
+        parcial += datos[x & 4095];
+    }
+    scribe(parcial);
+    total += parcial;
+
+    redde total;
+}
