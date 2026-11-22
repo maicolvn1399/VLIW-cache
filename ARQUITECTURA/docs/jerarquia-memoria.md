@@ -119,7 +119,7 @@ Es un argumento sobre esta asociatividad, no sobre LRU en general: con 4 vías e
 
 El profesor dijo que el stall es aceptable si el forwarding no se puede implementar. Aquí no es que no se pudo: es que cuesta menos que no equivocarse en el forwarding.
 
-**Costo medido: un (1) ciclo** en los 11 programas de la Iteración 3, en `lazo_estres.s`, y **cero** en las 154 corridas del barrido de la Iteración 5. Eso es todo lo que el forwarding habría ahorrado.
+**Costo medido: un (1) ciclo** en los 11 programas de la Iteración 3, en `lazo_estres.s`, y **cero** en las 154 corridas del barrido de la Iteración 5. El peor caso medido sale de código de NOVA que lee la línea que acaba de escribir: `estres_escritura` pierde **7749 ciclos** con `-O0` y `-O1`, el 6,8 % de su stall, y 69 con `-O2`, porque el compilador separa los accesos ([analisis-rendimiento.md](analisis-rendimiento.md) §12.1). Ese es el techo de lo que el forwarding habría ahorrado; el resto del stall de ese programa no lo toca el forwarding.
 
 ```systemverilog
 assign espera_raw = falla_lectura && wb_conflicto;
@@ -163,11 +163,13 @@ El único caso delicado es que la invalidación llegue en el mismo ciclo en que 
 | 2× | L2 de 8 KB; L1 de 8 KB | 0, y 2 en `patron_aleatorio` con L1 de 8 KB |
 | 1× | L2 de 4 KB; L1 de 16 KB | hasta 897 (`patron_stride`) |
 
-**Con la geometría del enunciado, la inclusión no cuesta nada medible**: la L2 tiene cuatro veces las líneas de L1 y casi nunca expulsa algo que L1 todavía tenga. El costo aparece solo cuando L1 se acerca al tamaño de L2. Con L2 de 4 KB, `patron_aleatorio` pierde 20 aciertos de L1 (de 132 a 112) por líneas que la L2 le obligó a soltar.
+**Con la geometría del enunciado, la inclusión no cuesta nada en el barrido**: la L2 tiene cuatro veces las líneas de L1 y casi nunca expulsa por capacidad algo que L1 todavía tenga. Por capacidad, el costo aparece solo cuando L1 se acerca al tamaño de L2. Con L2 de 4 KB, `patron_aleatorio` pierde 20 aciertos de L1 (de 132 a 112) por líneas que la L2 le obligó a soltar.
+
+**El conflicto sí la alcanza con la L2 de 16 KB.** La relación de tamaños no protege cuando más de cuatro líneas que L1 está usando caen en el mismo conjunto de L2: la L2 tiene que expulsar una aunque le sobre capacidad. `estres_conflicto` con `-O2`, un programa de NOVA con ocho líneas separadas 4 KB, produce **24 invalidaciones**, y la L1 acierta exactamente 24 lecturas menos que sin L2 (2722 contra 2746, un 0,9 %). Es el costo más alto medido con la geometría del proyecto, y sale de un patrón escrito para provocarlo ([analisis-rendimiento.md](analisis-rendimiento.md) §12.1).
 
 La medición también muestra la consecuencia estructural de la inclusión: **la capacidad útil de la jerarquía es la de L2, no la suma**. En `patron_aleatorio`, agrandar L1 de 4 a 16 KB con L2 de 16 KB mueve aciertos de L2 a L1 (aciertos L1 + L2: 359, 356, 357) sin bajar los fallos de L2 (665 a 667). Con NINE la jerarquía podría guardar algo más; con esta relación de tamaños, la diferencia no se vería.
 
-**Por qué no se volvió a NINE.** El argumento de NINE era que la inclusión complica y no aporta. Lo primero resultó cierto una vez: la invalidación vino rota en la Iteración 4 (comparaba una etiqueta reconstruida con bits fuera de rango y no invalidaba nunca) y su prueba no lo detectaba. Ya está arreglada y la prueba ahora comprueba el efecto. Con el mecanismo funcionando y su costo medido en cero para la geometría del proyecto, volver a NINE era borrar lógica probada sin ganar ningún ciclo.
+**Por qué no se volvió a NINE.** El argumento de NINE era que la inclusión complica y no aporta. Lo primero resultó cierto una vez: la invalidación vino rota en la Iteración 4 (comparaba una etiqueta reconstruida con bits fuera de rango y no invalidaba nunca) y su prueba no lo detectaba. Ya está arreglada y la prueba ahora comprueba el efecto. Con el mecanismo funcionando y su costo medido (cero en el barrido, y un 0,9 % de los aciertos de L1 en el peor patrón de conflicto), volver a NINE era borrar lógica probada para recuperar, en el mejor caso, 24 aciertos de L1 en un programa escrito para perderlos.
 
 ---
 
@@ -185,7 +187,7 @@ Los dos son instancias del mismo módulo, `eviction_buffer.sv`, porque hacen el 
 
 **Por qué 8 arriba (el máximo).** Un store entra al buffer hasta una vez por ciclo; drenar una línea cuesta 53. La tasa de llegada puede ser 53 veces la de salida, así que ninguna profundidad razonable evita que se llene ante una ráfaga sostenida de stores a líneas distintas. Lo que la profundidad compra es tolerancia a ráfagas cortas, que es el caso común, y ahí más entradas es estrictamente mejor sin costo de latencia.
 
-Lo que de verdad baja la presión no es la profundidad sino la **fusión**: varios stores a la misma línea ocupan una sola entrada, así que un recorrido con localidad espacial mete 8 stores en una entrada. La medición lo confirma: 10 de 11 programas pierden cero ciclos, y el único que sufre es el que escribe 128 líneas distintas seguidas, patrón que ninguna profundidad salva.
+Lo que de verdad baja la presión no es la profundidad sino la **fusión**: varios stores a la misma línea ocupan una sola entrada, así que un recorrido con localidad espacial mete 8 stores en una entrada. La medición lo confirma: 10 de 11 programas pierden cero ciclos, y el único que sufre es el que escribe 128 líneas distintas seguidas, patrón que ninguna profundidad salva. Los programas de NOVA de la Iteración 5 llevan ese caso al extremo: `estres_buffers` hace un store por línea sobre 32 KB y pasa el 56 % de su ejecución con el buffer lleno (296 364 ciclos con `-O2`), porque con la L2 write-allocate cada entrada que drena trae su línea de memoria ([analisis-rendimiento.md](analisis-rendimiento.md) §12.1).
 
 **Por qué 8 abajo (la mitad del rango).** La L2 es write-back, así que solo genera tráfico cuando **expulsa** una línea sucia, no en cada escritura; con 16 KB y 4 vías las expulsiones son esporádicas frente al flujo de stores, y 16 entradas serían estado sin uso.
 

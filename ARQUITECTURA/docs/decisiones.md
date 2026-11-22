@@ -20,7 +20,7 @@ El desarrollo completo de las políticas está en [jerarquia-memoria.md](jerarqu
 | 2 | **No-write-allocate** | write-allocate | Con write-through, traer una línea de 53 ciclos para escribirla hacia abajo de todos modos paga la latencia sin ganar nada. | aciertos de escritura = 0, exacto, comprobado |
 | 3 | **LRU exacto**, 1 bit por conjunto | FIFO, aleatorio, pseudo-LRU | A dos vías el LRU exacto cuesta un bit: 64 bits para toda la caché. A ese precio, aproximar no ahorra nada. | 384 aciertos exactos en `recorrido_cache.s` |
 | 4 | **Stall** para el riesgo RAW | store-to-load forwarding | El forwarding desde el buffer exige resolver máscaras de byte con prioridad por antigüedad, en el camino crítico del acierto de un ciclo. El profesor aceptó el stall. | **1 ciclo** en los 11 programas de la Iteración 3; **0** en las 154 corridas del barrido |
-| 5 | Inclusión **inclusiva** (L1 subconjunto de L2) | NINE, exclusiva | Con L1 write-through, invalidar es solo apagar un bit de válido. Hace medible el costo de coherencia entre niveles que pide el enunciado. Ver la nota de abajo. | **0 invalidaciones** con la geometría del proyecto; solo aparecen con L2 del tamaño de L1 |
+| 5 | Inclusión **inclusiva** (L1 subconjunto de L2) | NINE, exclusiva | Con L1 write-through, invalidar es solo apagar un bit de válido. Hace medible el costo de coherencia entre niveles que pide el enunciado. Ver la nota de abajo. | **0 invalidaciones** en el barrido con la geometría del proyecto; por capacidad solo aparecen con L2 del tamaño de L1, y por conflicto 24 en `estres_conflicto -O2` (0,9 % de los aciertos de L1) |
 | 6 | **Sin L1 de instrucciones** | L1-I de 4 KB | Indicación del profesor: corre un programa a la vez, no agregaría nada medible. | n/a |
 
 ### Dimensionamiento
@@ -61,7 +61,7 @@ Hasta la Iteración 3 la política documentada y acordada era **NINE**, con tres
 
 La Iteración 4 se implementó **inclusiva**. El riesgo que señalaba la justificación de NINE se materializó: la invalidación hacia atrás venía rota (reconstruía la etiqueta de L1 leyendo bits fuera de rango de un vector de 11 bits, así que la comparación no daba verdadero nunca) y nadie lo detectó porque su prueba no comprobaba nada. Se arregló y la prueba ahora comprueba el efecto.
 
-**Resuelta en la Iteración 5: se queda inclusiva.** Con el mecanismo funcionando, la medición decidió: con la geometría del proyecto (L2 cuatro veces la L1) hubo **cero invalidaciones** en los 14 programas, así que volver a NINE era borrar lógica probada sin ganar ningún ciclo. La justificación completa, con lo medido, está en [jerarquia-memoria.md](jerarquia-memoria.md) D6 y en [analisis-rendimiento.md](analisis-rendimiento.md) §10.
+**Resuelta en la Iteración 5: se queda inclusiva.** Con el mecanismo funcionando, la medición decidió: con la geometría del proyecto (L2 cuatro veces la L1) hubo **cero invalidaciones** en los 14 programas del barrido. El único costo medido con esa geometría sale de un patrón de conflicto escrito para provocarlo: 24 invalidaciones en `estres_conflicto -O2`, el 0,9 % de los aciertos de L1. Volver a NINE era borrar lógica probada para recuperar eso. La justificación completa, con lo medido, está en [jerarquia-memoria.md](jerarquia-memoria.md) D6 y en [analisis-rendimiento.md](analisis-rendimiento.md) §10.
 
 ---
 
@@ -98,6 +98,8 @@ La clave es el criterio de aceptación, no el código: **con `WAYS=2` el comport
 La justificación original: es forzoso, no una preferencia: la L2 es write-back, y con no-write-allocate los stores le pasarían de largo hacia memoria, así que la L2 nunca tendría datos sucios y el write-back no serviría de nada. Write-back y write-allocate van juntos por la misma razón por la que write-through y no-write-allocate van juntos (decisión 2).
 
 **Optimización que vale considerar en el mismo paquete:** si la máscara que llega del write buffer cubre la línea completa (32 bytes, posible gracias a la fusión), se puede **omitir la lectura de memoria** y escribir la línea directo, porque no hay ningún byte viejo que preservar. Eso ahorra 53 ciclos en el caso que la fusión vuelve común.
+
+**Costo medido en la Iteración 5.** Write-allocate tiene un caso malo: stores dispersos, uno por línea, sobre más de lo que cabe en la L2. `estres_buffers -O2` es 1,36× más lento con L2 que sin ella, porque cada store de 4 bytes trae su línea de memoria y después la devuelve sucia, y el atajo de línea completa no se activa porque ningún store cubre la línea. Con leer-modificar-escribir, write-allocate gana (`estres_escritura`, 1,67× con `-O0`). Ver [analisis-rendimiento.md](analisis-rendimiento.md) §12.1.
 
 ### P4. Qué pasa con las instrucciones en una L2 "unificada"
 
