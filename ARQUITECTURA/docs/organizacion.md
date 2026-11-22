@@ -10,14 +10,15 @@ Complementos: [jerarquia-memoria.md](jerarquia-memoria.md) (políticas) y [anali
 
 ## 1. Módulos
 
-23 módulos RTL en `src/cpu/`, 5970 líneas, con 35 unidades de prueba. Los seis del Proyecto II van en negrita.
+26 módulos RTL en `src/cpu/`, 6911 líneas, con 38 unidades de prueba. Los ocho del Proyecto II van en negrita.
 
 | Módulo | Qué es | Líneas | Testbench |
 |---|---|---|---|
-| `top.sv` | el sistema completo: instancia y conecta todo | 1010 | `tb_top`, `tb_programa` |
-| **`l1_dcache.sv`** | **caché L1-D, 4 KB, 2 vías** | **421** | `tb_l1_dcache` (50) |
-| **`mem_controller.sv`** | **FSM de 5 estados del acceso a memoria** | **359** | `tb_mem_system` (59) |
-| `perf_counters.sv` | 21 contadores de rendimiento | 356 | `tb_perf_counters` (66) |
+| `top.sv` | el sistema completo: instancia y conecta todo | 1192 | `tb_top`, `tb_patrones` (24), `tb_programa` |
+| **`l1_dcache.sv`** | **caché L1-D, 4 KB, 2 vías** | **478** | `tb_l1_dcache` (55) |
+| `perf_counters.sv` | 31 contadores de rendimiento | 478 | `tb_perf_counters` (95) |
+| **`l2_cache.sv`** | **caché L2 unificada, 16 KB, N vías** | **463** | `tb_l2_cache` (37) |
+| **`mem_controller.sv`** | **FSM de 5 estados del acceso a memoria** | **363** | `tb_mem_system` (59) |
 | `lsu.sv` / `alu.sv` / `bru.sv` | S2 / S0 y S1 / S4 | 331 / 321 / 311 | los suyos |
 | **`eviction_buffer.sv`** | **FIFO de líneas con máscara y fusión** | **249** | `tb_eviction_buffer` (63) |
 | `psw_fault_unit.sv` / `key_vault.sv` | fallas y PSW / bóveda | 250 / 239 | los suyos |
@@ -28,6 +29,7 @@ Complementos: [jerarquia-memoria.md](jerarquia-memoria.md) (políticas) y [anali
 | `reg_id_ex.sv` / `reg_ex_mem.sv` / `reg_if_id.sv` | las tres fronteras | 136 / 132 / 88 | los suyos |
 | `fetch.sv` | PC y selección de destino | 127 | `tb_fetch` (50) |
 | **`main_memory.sv`** | **64 KB, escritura habilitada por byte** | **120** | `tb_mem_system` |
+| **`l2_arbiter.sv`** | **un solo puerto de L2 para la L1 y el write buffer** | **113** | `tb_l2_arbiter` (24) |
 | **`mem_clock_gen.sv`** | **divisor ÷4, genera `mem_tick`** | **105** | `tb_mem_clock_gen` (14) |
 
 `dmem.sv` se conserva aunque `top.sv` ya no lo instancie: sigue siendo el modelo de memoria de un ciclo contra el cual se comparan las mediciones.
@@ -151,11 +153,11 @@ assign via_acertada = acierto_v1;        // con dos vías, el acierto es un bit
 assign via_victima  = ~mru[conjunto];    // la víctima es la que no es MRU
 ```
 
-Estas líneas son las que fijan la asociatividad en dos. El módulo aborta la elaboración si se le pide otra, en vez de indexar una vía que no existe.
+⚠️ Estas líneas son las que fijan la asociatividad en dos. Los arreglos se dimensionan con `L1D_WAYS`, pero la búsqueda y la víctima no, y el módulo no comprueba que `L1D_WAYS` valga 2. Por eso el barrido de capacidad de L1 cambia `L1D_BYTES`, `L1D_SETS` y `L1D_SIDX_W` y deja las vías en dos. La L2 sí es de N vías (§3b.2).
 
 ### 3.3 Máquina de estados
 
-Dos estados, no cinco, porque la caché no modela el tiempo: el tiempo vive en el controlador.
+Dos estados, no cinco, porque la caché no modela el tiempo: el tiempo vive abajo, en la L2 y en el controlador de memoria.
 
 ```
       ┌──────────────────────────────────────────┐
@@ -191,12 +193,16 @@ assign espera_buffer = es_store && wb_lleno;           // no hay dónde poner el
 | write buffer | `wb_push`, `wb_linea`, `wb_datos`, `wb_mascara` | out | el store que baja |
 | | `wb_lleno` | in | no hay espacio |
 | | `wb_consulta` / `wb_conflicto` | out / in | la pregunta RAW y su respuesta |
-| nivel de abajo | `mem_req`, `mem_linea` | out | traer esta línea |
+| nivel de abajo (árbitro) | `mem_req`, `mem_linea` | out | traer esta línea |
 | | `mem_listo`, `mem_datos` | in | la línea llegó |
+| L2 | `inv_req`, `inv_linea` | in | invalidación hacia atrás: soltar esta línea |
 | contadores | `ev_load_hit/miss`, `ev_store_hit/miss` | out | un pulso por evento |
 | | `ev_stall_miss/wb/raw` | out | un pulso por ciclo perdido |
+| | `ev_inv_ejecutada` | out | un pulso por invalidación que encontró la línea |
 
-Los siete `ev_*` son pulsos de un ciclo que van directo a `perf_counters.sv`. Importa que sean salidas de la caché y no algo que el testbench deduzca: las métricas las produce el hardware.
+La invalidación compara la línea que manda la L2 contra las dos vías del conjunto y apaga el bit de válido de la que coincida. `ev_inv_ejecutada` solo se levanta si la L1 de verdad tenía la línea: cuenta invalidaciones ejecutadas, no pedidas, que es lo que pide la sección 5.2 del enunciado. Si la invalidación llega en el mismo ciclo en que la L1 termina de rellenar esa línea, gana la invalidación.
+
+Los ocho `ev_*` son pulsos de un ciclo que van directo a `perf_counters.sv`. Importa que sean salidas de la caché y no algo que el testbench deduzca: las métricas las produce el hardware.
 
 ---
 
@@ -294,7 +300,7 @@ Siete estados. A diferencia de la L1, la L2 sí modela tiempo: su hit time de 8 
                                      └──────────────────────┘
 ```
 
-Un acierto cuesta 1 ciclo en `ESPERA`, 6 en `LATENCIA` (el contador arranca en `L2_HIT_CYCLES - 3`) y 1 en `EVALUAR`: 8, exactamente la macro. Un fallo suma los 53 de memoria en `ALLOCATE` y 2 ciclos más de `ALLOCATE` y `ACTUALIZAR`: 63 (`L2_MISS_EXTRA = 2`). Las políticas viven en lo que se escribe al salir de cada estado:
+Un acierto cuesta 1 ciclo en `ESPERA`, 6 en `LATENCIA` (el contador arranca en `L2_HIT_CYCLES - 3`) y 1 en `EVALUAR`: 8, exactamente la macro. Un fallo suma los 53 de memoria en `ALLOCATE` y 2 ciclos más: `EVALUAR`, que en un fallo ya no entrega nada, y `ACTUALIZAR`, en que la L2 escribe la línea antes de entregarla. Total 63 (`L2_MISS_EXTRA = 2`). Sin L2, un fallo de L1 cuesta 53 + 1 = 54 (`MEM_DIRECTO_EXTRA`). Las tres cifras se miden fallo por fallo en [analisis-rendimiento.md](analisis-rendimiento.md) §9. Las políticas viven en lo que se escribe al salir de cada estado:
 
 - write-back: una escritura que acierta solo marca `sucio`; la línea baja a memoria cuando se expulsa (`EVICT`) o en el vaciado.
 - write-allocate: una escritura que falla trae la línea y la mezcla byte por byte con lo escrito, según la máscara. Si la máscara cubre los 32 bytes, `ALLOCATE` no lee memoria (bypass).
@@ -331,13 +337,13 @@ El `!mem_listo` de `mem_req` es el contrato de la sección 8. Sin él, el contro
 | contadores | `ev_l2_load_hit/miss`, `ev_l2_store_hit/miss` | out | un pulso por petición, en `EVALUAR` |
 | | `ev_stall_evict` | out | un pulso por ciclo en `EVICT` con el buffer lleno |
 
-La L2 tiene un solo puerto y dos clientes. `l2_arbiter.sv` los reparte con tres estados (`LIBRE`, `SIRVIENDO_L1`, `SIRVIENDO_WB`): la lectura gana porque tiene al pipeline detenido, un drenado que ya entró termina antes de atender otra cosa, y mientras drena levanta `wb_drenando`, conectado a `head_ocupada` del write buffer, para que un store nuevo no se fusione con la línea que ya va en camino. Compilado con `-DCERBERO_SIN_L2`, `top.sv` no instancia `l2_cache` y conecta el árbitro directo a `mem_system`; es la línea base de [analisis-rendimiento.md](analisis-rendimiento.md).
+La L2 tiene un solo puerto y dos clientes. `l2_arbiter.sv` los reparte con tres estados (`LIBRE`, `SIRVIENDO_L1`, `SIRVIENDO_WB`): la lectura gana porque tiene al pipeline detenido, un drenado que ya entró termina antes de atender otra cosa, y mientras drena levanta `wb_drenando`, conectado a `head_ocupada` del write buffer, para que un store nuevo no se fusione con la línea que ya va en camino. Compilado con `-DCERBERO_SIN_L2`, `top.sv` no instancia `l2_cache` y conecta el árbitro directo a `mem_system`: la lectura del árbitro pasa a ser `mem_req`, y el drenado del write buffer entra al eviction buffer con su máscara, en un ciclo salvo que esté lleno. La L1, el write buffer, el árbitro y el subsistema de memoria son exactamente los mismos, así que la diferencia medida es la que aporta la L2. La invalidación se ata a cero y los contadores de L2 quedan en cero. Es la línea base de [analisis-rendimiento.md](analisis-rendimiento.md).
 
 ---
 
 ## 4. El sistema de memoria por dentro
 
-`mem_system.sv` no tiene lógica propia: conecta cuatro módulos y expone un solo protocolo hacia arriba.
+`mem_system.sv` no tiene lógica propia: conecta cuatro módulos y expone un solo protocolo hacia arriba. Su cliente es la L2, que lee con `mem_req` en `ALLOCATE` y escribe con `ev_push` en `EVICT` y `VACIANDO`; sin L2, el cliente es el árbitro. El módulo no cambió al insertar la L2.
 
 ### 4.1 Cruce de dominios de reloj
 
@@ -374,7 +380,7 @@ Su testbench comprueba una invariante: **cada `mem_tick` coincide con un flanco 
                 └────────────────────────────────┘
 ```
 
-**Prioridad.** Una lectura gana sobre un drenado, porque la lectura tiene al pipeline detenido esperándola y el drenado no detiene a nadie. La excepción es el conflicto RAW: si lo que se quiere leer está en el buffer, hay que drenar primero.
+**Prioridad.** Una lectura gana sobre un drenado, porque la lectura tiene a alguien esperándola y el drenado no. La excepción es el conflicto RAW: si lo que se quiere leer está en el buffer, hay que drenar primero.
 
 ```systemverilog
 assign puede_leer   = req && !ev_conflicto;
@@ -401,7 +407,7 @@ Tres funciones: **FIFO** (las líneas salen en el orden en que entraron), **fusi
 
 ## 5. Los contadores de métricas
 
-21 contadores de 32 bits con la misma estructura: suman de 0 a 7 por ciclo, **saturan** en el máximo en vez de envolver, y levantan un bit pegajoso si alguno saturó.
+31 contadores de 32 bits con la misma estructura: suman de 0 a 7 por ciclo, **saturan** en el máximo en vez de envolver, y levantan un bit pegajoso si alguno saturó.
 
 ```systemverilog
 if (cont[k] > TOPE - inc[k]) begin
@@ -411,14 +417,22 @@ end
 else cont[k] <= cont[k] + inc[k];
 ```
 
-| Grupo | Contadores |
-|---|---|
-| Tiempo y trabajo | `ciclos`, `bundles`, `instrucciones` |
-| Ocupación del VLIW | `ops_por_slot[0..4]` |
-| Accesos | `accesos_load`, `accesos_store` |
-| Eficiencia del código | `bundles_vacios`, `saltos_tomados`, `delay_vacios` |
-| Stalls | `ciclos_stall`, y `stall_por_miss`, `stall_por_wb`, `stall_por_raw` |
-| Caché | `l1_load_hit`, `l1_load_miss`, `l1_store_hit`, `l1_store_miss` |
+| Grupo | Contadores | Sección del enunciado |
+|---|---|---|
+| Tiempo y trabajo | `ciclos`, `bundles`, `instrucciones` | 5.1 |
+| Ocupación del VLIW | `ops_por_slot[0..4]` | 5.1 |
+| Accesos | `accesos_load`, `accesos_store` | 5.1 |
+| Eficiencia del código | `bundles_vacios`, `saltos_tomados`, `delay_vacios` | 5.1 |
+| Stalls por causa | `ciclos_stall`, y `stall_por_miss`, `stall_por_wb`, `stall_por_raw`, `stall_por_evict` | 5.1 |
+| Stall de fallo de L1, según la L2 | `stall_l2_hit`, `stall_l2_miss` | 5.1 |
+| L1-D | `l1_load_hit`, `l1_load_miss`, `l1_store_hit`, `l1_store_miss` | 5.2 |
+| L2 | `l2_load_hit`, `l2_load_miss`, `l2_store_hit`, `l2_store_miss` | 5.2 |
+| Inclusión | `inv_ejecutadas` | 5.2 |
+| Memoria principal | `mem_accesos`, `mem_ciclos` | 5.3 |
+
+Las lecturas de L2 son los rellenos de la L1 y las escrituras son los drenados del write buffer, así que la separación que pide el Cuadro 2 ("reads y writes por separado desde L1-D") la da el hardware. La utilización del bus se calcula en el informe como `mem_ciclos` sobre los ciclos del reset al drenado completo: la ventana incluye el vaciado de la L2 posterior al `HALT`, porque ahí el bus sigue transfiriendo.
+
+**El reparto del stall de un fallo.** Cuando la L1 falla, todavía no se sabe si la L2 va a acertar: eso se decide en `EVALUAR`, varios ciclos después de que empezó el stall. Por eso `perf_counters.sv` acumula los ciclos del fallo en curso y, cuando la línea llega a la L1 (`ev_relleno_fin`), los descarga enteros en `stall_l2_hit` o en `stall_l2_miss` según si esa lectura llegó a memoria principal. La suma de los dos es `stall_por_miss`, y `tb_programa.sv` lo comprueba en cada corrida.
 
 Dos habilitaciones, y la diferencia importa:
 
@@ -439,19 +453,21 @@ Sin stall, un bundle por ciclo, y por eso el "ideal" de las tablas de resultados
 ciclo    IF      ID      EX        MEM       WB     cache_stall
   n      k+3     k+2     k+1 (lw)  k         k-1        0
  n+1     k+3 ◀─  k+2 ◀─  k+1 ◀─    burbuja   k          1   ← congela
- ...     (retenidos, 53 ciclos)                         1
-n+54     k+4     k+3     k+2       k+1       burbuja    0   ← sigue
+ ...     (retenidos P ciclos)                           1
+n+P+1    k+4     k+3     k+2       k+1       burbuja    0   ← sigue
 ```
 
-Arriba se retiene (`fetch`, `imem`, `reg_if_id`, `reg_id_ex` reciben `stall`), abajo se inyecta burbuja (`ex_commit` baja). Esas burbujas son los ciclos que los contadores reportan como `ciclos_stall`.
+`P` es la penalidad del fallo: 8 ciclos si la L2 acierta, 63 si falla, 54 sin L2. Arriba se retiene (`fetch`, `imem`, `reg_if_id`, `reg_id_ex` reciben `stall`), abajo se inyecta burbuja (`ex_commit` baja). Esas burbujas son los ciclos que los contadores reportan como `ciclos_stall`. El pipeline no sabe nada de la L2: solo ve `cache_stall`, que sale de la L1.
 
 ---
 
 ## 7. Flujo de datos
 
-**Load que acierta (1 ciclo).** `lsu` calcula la dirección, `l1_dcache` la parte, compara las dos vías en paralelo, selecciona la palabra de la línea y actualiza `mru[conjunto]`. `load_align` extrae el byte, half o word según el opcode, y `regfile` escribe.
+**Load que acierta en L1 (1 ciclo).** `lsu` calcula la dirección, `l1_dcache` la parte, compara las dos vías en paralelo, selecciona la palabra de la línea y actualiza `mru[conjunto]`. `load_align` extrae el byte, half o word según el opcode, y `regfile` escribe.
 
-**Load que falla (53 ciclos más).** Si hay `wb_conflicto`, se queda en `ESPERA` con stall sin emitir, hasta que el buffer drene esa línea. Si no, emite `mem_req` y pasa a `LLENA`. El controlador arbitra en `LIBRE` (la lectura gana), pasa 24 ciclos en `RD_LAT` y 7 palabras × 4 ciclos en `RD_BURST`. Al llegar `listo`, la caché escribe la vía víctima (`~mru`), pone válido y etiqueta, actualiza `mru`, baja `stall` y entrega la palabra.
+**Load que falla en L1 y acierta en L2 (8 ciclos más).** Si hay `wb_conflicto`, la L1 se queda en `ESPERA` con stall, sin emitir, hasta que el árbitro drene esa línea a la L2. Si no, emite `mem_req` y pasa a `LLENA`. El árbitro pasa a `SIRVIENDO_L1` y levanta `req_lectura`. La L2 cuenta su hit time en `LATENCIA`, acierta en `EVALUAR`, rejuvenece la vía y levanta `listo` con la línea. Al llegarle, la L1 escribe la vía víctima (`~mru`), pone válido y etiqueta, actualiza `mru`, baja `stall` y entrega la palabra.
+
+**Load que falla en los dos (63 ciclos más).** Igual hasta `EVALUAR`, donde la L2 falla. Si su víctima está sucia, va a `EVICT`: levanta `l2_inv_req` para que la L1 la suelte y empuja la línea al eviction buffer. Después, en `ALLOCATE`, pide la línea a `mem_system`, cuyo controlador arbitra en `LIBRE`, pasa 24 ciclos en `RD_LAT` y 7 palabras × 4 ciclos en `RD_BURST`. En `ACTUALIZAR` la L2 instala la línea limpia, avisa la invalidación de la víctima si era válida y entrega la línea hacia arriba por el mismo camino.
 
 **Store (nunca espera, salvo buffer lleno).**
 
@@ -469,19 +485,26 @@ Arriba se retiene (`fetch`, `imem`, `reg_if_id`, `reg_id_ex` reciben `stall`), a
      sí → fusiona: mezcla datos, OR de máscaras, no ocupa entrada
      no → entrada nueva; si no hay, levanta lleno y la caché hace stall
             ▼
- mem_controller: drena cuando no hay lectura pendiente.
-     mem_be = mascara_actual[idx*4 +: 4]   (recorta la máscara a la palabra)
+ l2_arbiter: drena la cabeza cuando la L1 no está leyendo
             ▼
- main_memory: escribe solo los bytes habilitados
+ l2_cache: ¿la línea está en la L2?
+     sí → escribe los bytes de la máscara y la marca sucia (write-back)
+     no → la trae de memoria (write-allocate), salvo que la máscara
+          cubra los 32 bytes; mezcla y la instala sucia
+            ▼
+ la línea queda en la L2. Baja a memoria solo cuando la L2 la expulsa
+ (EVICT) o al vaciar al final (VACIANDO), siempre como línea completa
+            ▼
+ u_evict ──▶ mem_controller ──▶ main_memory
 ```
 
-La máscara es la pieza que hace correcto un `SB` bajo write-through, y por eso recorre el sistema entero: la produce la LSU, la lleva la caché, la fusiona el buffer, la recorta el controlador palabra por palabra, y la aplica la memoria.
+La máscara es la pieza que hace correcto un `SB` bajo write-through, y por eso recorre el sistema entero: la produce la LSU, la lleva la L1, la fusiona el write buffer y la aplica la L2 al mezclar; desde ahí la línea viaja completa. Sin L2, la máscara llega hasta el controlador, que la recorta palabra por palabra (`mem_be = mascara_actual[idx*4 +: 4]`), y la aplica la memoria.
 
 ---
 
 ## 8. El protocolo entre niveles
 
-Todos los niveles hablan la misma pareja de señales, y eso permitirá insertar la L2 sin tocar lo que está alrededor.
+Todos los niveles hablan la misma pareja de señales, y eso es lo que permitió insertar la L2 en la Iteración 4 sin tocar `mem_system` ni el camino de relleno de la L1 (lo único que la L1 ganó fue el puerto de invalidación), y lo que permite quitarla con una macro.
 
 | Señal | Quién la levanta | Contrato |
 |---|---|---|
@@ -490,18 +513,26 @@ Todos los niveles hablan la misma pareja de señales, y eso permitirá insertar 
 
 **La regla: `req` baja al ver `listo`.** El de arriba lo mantiene hasta ver `listo` y entonces lo baja; el de abajo no acepta otra petición en el mismo ciclo en que entrega. Sin eso, un `req` que se queda levantado un ciclo más se lee como petición nueva y dispara otra transferencia de 53 ciclos.
 
-La interfaz de línea, igual en los dos buffers y en los dos niveles: índice de línea 11 bits (`MEM_LIDX_W`), datos 256 bits (`LINE_W`), máscara 32 bits (`LINE_MASK_W`).
+| Frontera | Arriba | Abajo |
+|---|---|---|
+| L1 ↔ árbitro | `l1_dcache` (`mem_req`) | `l2_arbiter` (`l1_listo`) |
+| árbitro ↔ L2 | `l2_arbiter` (`req_lectura`, `req_escritura`) | `l2_cache` (`listo`) |
+| L2 ↔ memoria | `l2_cache` (`mem_req`) | `mem_system` (`listo`) |
+
+La interfaz de línea, igual en los dos buffers y en todos los niveles: índice de línea 11 bits (`MEM_LIDX_W`), datos 256 bits (`LINE_W`), máscara 32 bits (`LINE_MASK_W`).
 
 ---
 
 ## 9. Cómo recorrer el código
 
-`cerbero_defs.svh` (geometría y tiempos en un lugar), `l1_dcache.sv` (la sección 3.2 es su corazón), `mem_system.sv` (196 líneas que solo conectan: la estructura del subsistema de un vistazo), `mem_controller.sv` (donde vive el tiempo), la sección de memoria de datos de `top.sv` (donde la caché se enchufa y se define `ex_commit`) y `tb_l1_dcache.sv` (cuyos 50 casos dicen qué se considera correcto).
+`cerbero_defs.svh` (geometría y tiempos en un lugar), `l1_dcache.sv` (la sección 3.2 es su corazón), `l2_arbiter.sv` (113 líneas, la FSM completa), `l2_cache.sv` (§3b), la sección "JERARQUIA DE MEMORIA DE DATOS" de `top.sv` (donde se conecta todo, se define `ex_commit` y vive `CERBERO_SIN_L2`), `mem_system.sv` (196 líneas que solo conectan), `mem_controller.sv` (donde vive el tiempo de la memoria), `perf_counters.sv` (el reparto del stall de §5) y `tb_l1_dcache.sv` y `tb_l2_cache.sv` (cuyos 55 y 37 casos dicen qué se considera correcto).
 
 ```bash
 cd src/build
 make                     # lista las unidades disponibles
-make clean && make all   # las 35
-make l1_dcache           # una sola; deja tb_l1_dcache.vcd
-gtkwave tb_l1_dcache.vcd
+make clean && make all   # las 38
+make jerarquia           # mem_system, l1_dcache, l2_cache, l2_arbiter, eviction_buffer
+make l2_cache            # una sola; deja tb_l2_cache.vcd
+gtkwave tb_l2_cache.vcd
+make clean && make correr PROG=patron_reuso XFLAGS_EXTRA=-DCERBERO_SIN_L2   # sin L2
 ```
