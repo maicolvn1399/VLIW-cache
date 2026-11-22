@@ -54,33 +54,60 @@ Complementos: [jerarquia-memoria.md](jerarquia-memoria.md) (políticas) y [anali
 │                     │     l1_dcache      │                   │           │
 │                     │ etiqueta[2][64] 21b│                   │           │
 │                     │ datos[2][64]   256b│── rdata ──────────┘           │
-│                     │ valido[2][64]      │                                │
-│                     │ mru[64]            │                                │
-│                     │ FSM: ESPERA/LLENA  │                                │
-│                     └──┬──────┬───────┬──┘                                │
-│         stall ◀─────────┘      │       │ wb_push, wb_linea,               │
-│                                │       │ wb_datos, wb_mascara             │
-│  ┌───────────────┐   mem_req   │       ▼                                  │
-│  │ perf_counters │  mem_linea  │  ┌──────────────────────┐                │
-│  │ 21 contadores │◀─ ev_load_* │  │ eviction_buffer      │                │
-│  │ saturantes    │   ev_store_*│  │ u_write_buffer, 8    │                │
-│  │ + bit pegajoso│   ev_stall_*│  │ fusión + conflicto   │                │
-│  └───────────────┘  mem_listo  │  └──────┬───────────────┘                │
-│                     mem_datos  │         │ head_valido / head_ack         │
-│                   ┌────────────▼─────────▼──────────────────┐             │
-│                   │            mem_system.sv                │             │
-│                   │  mem_clock_gen (DIV=4) ── mem_tick ──┐  │             │
-│                   │  eviction_buffer u_evict, 8          │  │             │
-│                   │        │ ev_valido / ev_ack          │  │             │
-│                   │  mem_controller ◀───────────────────-┘  │             │
+│                     │ valido[2][64]      │                               │
+│                     │ mru[64]            │◀── inv_req, inv_linea ─────┐  │
+│                     │ FSM: ESPERA/LLENA  │                            │  │
+│                     └──┬──────┬───────┬──┘                            │  │
+│         stall ◀────────┘      │       │ wb_push, wb_linea,            │  │
+│                     mem_req   │       │ wb_datos, wb_mascara          │  │
+│                     mem_linea │       ▼                               │  │
+│           mem_listo ▲         │  ┌──────────────────────┐             │  │
+│           mem_datos │         │  │ eviction_buffer      │             │  │
+│                     │         │  │ u_write_buffer, 8    │             │  │
+│                     │         │  │ fusión + conflicto   │             │  │
+│                     │         │  └──────┬───────────────┘             │  │
+│                     │         │         │ head_valido / head_ack,     │  │
+│                     │         │         │ head_ocupada                │  │
+│                   ┌─┴─────────▼─────────▼─┐                           │  │
+│                   │      l2_arbiter       │                           │  │
+│                   │ LIBRE / SIRVIENDO_L1 /│                           │  │
+│                   │ SIRVIENDO_WB          │                           │  │
+│                   │ la lectura gana       │                           │  │
+│                   └───────────┬───────────┘                           │  │
+│                               │ req_lectura, req_escritura,           │  │
+│                               │ req_linea, req_wdata, req_wmask       │  │
+│                   ┌───────────▼───────────┐                           │  │
+│                   │       l2_cache        │── l2_inv_req, ────────────┘  │
+│                   │ etiqueta[4][128]   4b │   l2_inv_linea               │
+│                   │ datos[4][128]    256b │                              │
+│                   │ valido[4][128]        │                              │
+│                   │ sucio[4][128]         │                              │
+│                   │ edades[4][128]     2b │                              │
+│                   │ FSM: 7 estados        │                              │
+│                   └────┬─────────────┬────┘                              │
+│           mem_req,     │             │ ev_push, ev_linea, ev_datos       │
+│           mem_linea    │             │ (línea sucia expulsada)           │
+│                   ┌────▼─────────────▼──────────────────────┐            │
+│                   │            mem_system.sv                │            │
+│                   │  mem_clock_gen (DIV=4) ── mem_tick ──┐  │            │
+│                   │  eviction_buffer u_evict, 8          │  │            │
+│                   │        │ ev_valido / ev_ack          │  │            │
+│                   │  mem_controller ◀────────────────────┘  │            │
 │                   │    LIBRE RD_LAT RD_BURST WR_LAT WR_BURST│            │
-│                   │        │ addr, we, be, wdata             │            │
-│                   │  main_memory  16384 palabras, gated      │            │
-│                   └─────────────────────────────────────────┘             │
+│                   │        │ addr, we, be, wdata            │            │
+│                   │  main_memory  16384 palabras, gated     │            │
+│                   └─────────────────────────────────────────┘            │
+│                                                                          │
+│  ┌───────────────┐                                                       │
+│  │ perf_counters │◀── ev_* de l1_dcache, l2_cache y mem_system           │
+│  │ 31 contadores │                                                       │
+│  │ saturantes    │                                                       │
+│  │ + bit pegajoso│                                                       │
+│  └───────────────┘                                                       │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-El diagrama corresponde al código: cada caja es un módulo con ese nombre de archivo y cada etiqueta es el nombre que la señal tiene en el RTL. Los nombres de instancia (`u_l1d`, `u_write_buffer`, `u_evict`, `u_mem_sys`) son los que usan los testbenches para alcanzar el estado interno.
+El diagrama corresponde al código: cada caja es un módulo con ese nombre de archivo y cada etiqueta es el nombre que la señal tiene en el RTL. Los nombres de instancia (`u_l1d`, `u_write_buffer`, `u_l2_arbiter`, `u_l2_cache`, `u_evict`, `u_mem_sys`) son los que usan los testbenches para alcanzar el estado interno.
 
 ---
 
@@ -170,6 +197,141 @@ assign espera_buffer = es_store && wb_lleno;           // no hay dónde poner el
 | | `ev_stall_miss/wb/raw` | out | un pulso por ciclo perdido |
 
 Los siete `ev_*` son pulsos de un ciclo que van directo a `perf_counters.sv`. Importa que sean salidas de la caché y no algo que el testbench deduzca: las métricas las produce el hardware.
+
+---
+
+## 3b. La caché L2 por dentro
+
+### 3b.1 Dirección y estado
+
+La L2 no recibe direcciones de byte sino números de línea: el árbitro le entrega `req_linea`, de 11 bits (`MEM_LIDX_W`), porque la memoria es de 64 KB y tiene 2048 líneas de 32 B. La palabra y el byte ya los resolvió la L1.
+
+```
+   15         12 11           5 4      2 1   0      dirección de byte
+  ┌─────────────┬──────────────┬────────┬─────┐
+  │ etiqueta 4 b│ conjunto 7 b │palabra │byte │
+  └─────────────┴──────────────┴────────┴─────┘
+   req_linea      req_linea      (los resuelve la L1)
+   [10:7]         [6:0]
+```
+
+Los anchos salen de los parámetros `WAYS` y `SETS` del módulo, no escritos a mano:
+
+```systemverilog
+localparam int SET_W = $clog2(SETS);           // 7
+localparam int TAG_W = `MEM_LIDX_W - SET_W;    // 11 - 7 = 4
+localparam int WAY_W = $clog2(WAYS);           // 2
+```
+
+| Arreglo | Dimensiones | Bits | Para qué |
+|---|---|---|---|
+| `etiqueta` | `[0:3][0:127]` × 4 b | 2048 | comparar contra la línea pedida |
+| `datos` | `[0:3][0:127]` × 256 b | 131072 | los 16 KB |
+| `valido` | `[0:3][0:127]` × 1 b | 512 | si la vía tiene algo |
+| `sucio` | `[0:3][0:127]` × 1 b | 512 | la línea cambió y memoria tiene una copia vieja (write-back) |
+| `edades` | `[0:3][0:127]` × 2 b | 1024 | LRU exacto de cuatro vías |
+
+4096 bits de control para administrar 16 KB de datos. Un pseudo-LRU de árbol usaría 384 bits en vez de los 1024 de las edades; la diferencia es menos del 0,5 % del estado de la L2, que es por qué la decisión P1 de [decisiones.md](decisiones.md) se quedó con LRU exacto.
+
+### 3b.2 Búsqueda
+
+Las cuatro vías se comparan en paralelo, combinacional, como en la L1, pero los comparadores salen de un `generate` y no están escritos uno por uno. Eso es lo que hace a la L2 de N vías:
+
+```systemverilog
+generate
+    for (i = 0; i < WAYS; i++) begin : gen_comparadores
+        assign acierto_via[i] = valido[i][conjunto] && (etiqueta[i][conjunto] == tag_buscado);
+    end
+endgenerate
+assign acierto = |acierto_via;
+```
+
+La víctima es la vía con la edad máxima. En cada conjunto las edades son siempre una permutación de 0 a 3: en un acierto, la vía acertada pasa a 0 y envejecen en 1 solo las que eran más jóvenes que ella; en un fallo, la víctima pasa a 0 y envejecen todas las demás. El reset las arranca escalonadas (`edades[v] = v`).
+
+```systemverilog
+if (edades[v][conjunto] == WAY_W'(WAYS - 1)) via_victima = WAY_W'(v);
+```
+
+El módulo aborta la elaboración si `WAYS` no es potencia de dos mayor o igual que 2, o si `SETS` no es potencia de dos, en vez de indexar bits equivocados en silencio.
+
+### 3b.3 Máquina de estados
+
+Siete estados. A diferencia de la L1, la L2 sí modela tiempo: su hit time de 8 ciclos se cuenta en su propia FSM.
+
+```
+                ┌──────────────────────────────────────────────────┐
+                ▼                                                  │
+          ┌──────────┐ req_lectura ||       ┌──────────┐           │
+          │  ESPERA  │ req_escritura        │ LATENCIA │           │
+          │          │ ───────────────────▶ │ cuenta   │           │
+          └──┬────▲──┘                      │ hit time │           │
+   vaciar && │    │ vac_fin                 └────┬─────┘           │
+  tiene_     ▼    │                              ▼                 │
+  sucias ┌────────┴─┐                     ┌──────────────┐ acierto │
+         │ VACIANDO │                     │   EVALUAR    │─────────┤
+         │ empuja   │                     │ acierto o    │ (listo) │
+         │ sucias   │                     │ fallo        │         │
+         └──────────┘                     └──┬────────┬──┘         │
+                                  víctima    │        │ víctima    │
+                                  sucia      ▼        │ limpia o   │
+                                     ┌──────────┐     │ inválida   │
+                                     │  EVICT   │     │            │
+                                     │ ev_push  │     │            │
+                                     └────┬─────┘     │            │
+                                !ev_lleno ▼           ▼            │
+                                     ┌──────────────────────┐      │
+                                     │      ALLOCATE        │      │
+                                     │ mem_req, espera      │      │
+                                     │ mem_listo (o bypass  │      │
+                                     │ si la máscara es     │      │
+                                     │ de 32 B completos)   │      │
+                                     └──────────┬───────────┘      │
+                                                ▼                  │
+                                     ┌──────────────────────┐      │
+                                     │     ACTUALIZAR       │──────┘
+                                     │ instala en la víctima│ (listo)
+                                     │ edades, l2_inv_req   │
+                                     └──────────────────────┘
+```
+
+Un acierto cuesta 1 ciclo en `ESPERA`, 6 en `LATENCIA` (el contador arranca en `L2_HIT_CYCLES - 3`) y 1 en `EVALUAR`: 8, exactamente la macro. Un fallo suma los 53 de memoria en `ALLOCATE` y 2 ciclos más de `ALLOCATE` y `ACTUALIZAR`: 63 (`L2_MISS_EXTRA = 2`). Las políticas viven en lo que se escribe al salir de cada estado:
+
+- write-back: una escritura que acierta solo marca `sucio`; la línea baja a memoria cuando se expulsa (`EVICT`) o en el vaciado.
+- write-allocate: una escritura que falla trae la línea y la mezcla byte por byte con lo escrito, según la máscara. Si la máscara cubre los 32 bytes, `ALLOCATE` no lee memoria (bypass).
+- inclusión: cuando la víctima es válida, `l2_inv_req` y `l2_inv_linea` le piden a la L1 que la suelte. En la L1 eso solo apaga un bit de válido, porque la L1 es write-through y nunca tiene una línea sucia.
+- vaciado: al terminar el programa, `top.sv` levanta `vaciar` y la L2 recorre sus 512 entradas empujando las sucias; `mem_drenada` no sube mientras `tiene_sucias` siga en alto.
+
+Las condiciones que gobiernan las salidas hacia los otros niveles:
+
+```systemverilog
+assign mem_req      = (estado == ALLOCATE) && !(req_escritura && mascara_completa_32B)
+                   && !mem_listo;                         // contrato req/listo
+assign ev_push      = ((estado == EVICT) && !ev_lleno)
+                   || ((estado == VACIANDO) && vac_sucia && !ev_lleno);
+assign l2_inv_req   = (estado == ACTUALIZAR && valido[via_victima][conjunto])
+                   || (estado == EVALUAR && proximo_estado == EVICT);
+assign listo        = ((estado == EVALUAR) && acierto) || (estado == ACTUALIZAR);
+```
+
+El `!mem_listo` de `mem_req` es el contrato de la sección 8. Sin él, el controlador leía el pedido viejo como uno nuevo en el ciclo de `listo` y arrancaba una lectura fantasma cuyos datos terminaban en el relleno de otra línea; fue un error real de la Iteración 4.
+
+### 3b.4 Puertos
+
+| Grupo | Señales | Dir. | Qué lleva |
+|---|---|---|---|
+| árbitro | `req_lectura`, `req_escritura`, `req_linea` | in | rellenar una línea de L1 o drenar una del write buffer |
+| | `req_wdata`, `req_wmask` | in | la línea de 256 bits y la máscara de 32 de los bytes escritos |
+| | `rdata`, `listo` | out | la línea y el fin de la petición |
+| L1-D | `l2_inv_req`, `l2_inv_linea` | out | invalidación hacia atrás |
+| fin de programa | `vaciar` / `tiene_sucias` | in / out | el pedido de vaciado y su condición de parada |
+| memoria | `mem_req`, `mem_linea` | out | traer esta línea |
+| | `mem_listo`, `mem_datos` | in | la línea llegó |
+| eviction buffer | `ev_push`, `ev_linea`, `ev_datos`, `ev_mascara` | out | la línea sucia expulsada, siempre con máscara completa |
+| | `ev_lleno` | in | no hay espacio, `EVICT` espera |
+| contadores | `ev_l2_load_hit/miss`, `ev_l2_store_hit/miss` | out | un pulso por petición, en `EVALUAR` |
+| | `ev_stall_evict` | out | un pulso por ciclo en `EVICT` con el buffer lleno |
+
+La L2 tiene un solo puerto y dos clientes. `l2_arbiter.sv` los reparte con tres estados (`LIBRE`, `SIRVIENDO_L1`, `SIRVIENDO_WB`): la lectura gana porque tiene al pipeline detenido, un drenado que ya entró termina antes de atender otra cosa, y mientras drena levanta `wb_drenando`, conectado a `head_ocupada` del write buffer, para que un store nuevo no se fusione con la línea que ya va en camino. Compilado con `-DCERBERO_SIN_L2`, `top.sv` no instancia `l2_cache` y conecta el árbitro directo a `mem_system`; es la línea base de [analisis-rendimiento.md](analisis-rendimiento.md).
 
 ---
 
